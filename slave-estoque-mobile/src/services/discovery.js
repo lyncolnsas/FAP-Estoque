@@ -30,9 +30,12 @@ export const scanNetworkForServer = async (onProgress) => {
         if (response.ok) {
           const data = await response.json();
           if (data.service === 'slave-estoque-server') {
-             foundServer = { ip: targetIp, port: 3333 };
+             foundServer = { ip: targetIp, port: 3333, needsAuth: false };
              return foundServer;
           }
+        } else if (response.status === 401) {
+           foundServer = { ip: targetIp, port: 3333, needsAuth: true };
+           return foundServer;
         }
       } catch (err) {
         // Silencioso para não poluir

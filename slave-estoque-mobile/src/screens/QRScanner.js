@@ -71,12 +71,22 @@ export default function QRScannerScreen({ navigation }) {
     const result = parseQrCode(data);
     if (result && result.ips && result.port) {
       let connectedIp = null;
+      let needsAuth = false;
       try {
         const testIp = async (ip) => {
-          const isConnected = await handshake(ip, result.port);
-          if (isConnected) return ip;
-          throw new Error('Not connected');
+          try {
+            const isConnected = await handshake(ip, result.port);
+            if (isConnected) return ip;
+            throw new Error('Not connected');
+          } catch (e) {
+            if (e.message === 'UNAUTHORIZED') {
+              needsAuth = true;
+              return ip;
+            }
+            throw e;
+          }
         };
+        
         // Test all IPs in parallel. The first one to succeed resolves the promise.
         connectedIp = await Promise.any(result.ips.map(testIp));
       } catch (error) {
@@ -85,7 +95,11 @@ export default function QRScannerScreen({ navigation }) {
 
       if (connectedIp) {
         setApiUrl(connectedIp, result.port);
-        alert('Servidor configurado e conectado com sucesso!');
+        if (needsAuth) {
+           alert('Servidor encontrado! Você precisará digitar a palavra-passe ao tentar sincronizar.');
+        } else {
+           alert('Servidor configurado e conectado com sucesso!');
+        }
         navigation.goBack();
       } else {
         alert(`Falha de conexão.\nTestamos: ${result.ips.join(', ')}.\n\nVerifique se o celular está no mesmo Wi-Fi que o PC e se não está no 4G. Verifique também o Firewall do Windows!`);
@@ -113,7 +127,13 @@ export default function QRScannerScreen({ navigation }) {
         alert('Falha ao conectar no IP informado. Verifique se o IP está correto, se o PC e celular estão na mesma rede, e verifique o Firewall.');
       }
     } catch (error) {
-      alert('Erro ao tentar conectar.');
+      if (error.message === 'UNAUTHORIZED') {
+        setApiUrl(manualIp.trim(), 3333);
+        alert('Servidor encontrado! Você precisará digitar a palavra-passe ao tentar sincronizar.');
+        navigation.goBack();
+      } else {
+        alert('Erro ao tentar conectar.');
+      }
     } finally {
       setConnectingManual(false);
     }

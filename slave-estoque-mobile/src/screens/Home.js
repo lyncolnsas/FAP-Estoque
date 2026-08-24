@@ -10,14 +10,17 @@ import {
   TextInput,
   Image,
   ScrollView,
-  SafeAreaView
+  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  Modal
 } from 'react-native';
 import { db } from '../db/database';
 import { syncPull, syncPush, API_URL, setApiUrl, getApiMemory, handshake } from '../services/api';
 import { scanNetworkForServer } from '../services/discovery';
 import { imprimirComprovante, imprimirEtiqueta } from '../services/printer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Modal } from 'react-native';
+import { Settings, Upload, Download, PlusCircle, AlertTriangle, RefreshCw, Package, Printer, Server, Search } from 'lucide-react-native';
 
 export default function HomeScreen({ navigation }) {
   const [activeTab, setActiveTab] = useState('DASHBOARD'); // 'DASHBOARD' | 'ACERVO' | 'AVARIAS' | 'REQUISICOES' | 'ACOES'
@@ -32,6 +35,16 @@ export default function HomeScreen({ navigation }) {
   const [scanning, setScanning] = useState(false);
   const [showAutoConnect, setShowAutoConnect] = useState(false);
   const [autoConnecting, setAutoConnecting] = useState(false);
+  
+  // Senha de Autenticação Sync
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+  const [syncPassword, setSyncPassword] = useState('');
+
+  const handleSavePassword = async () => {
+    await AsyncStorage.setItem('SYNC_PASSWORD', syncPassword);
+    setShowPasswordPrompt(false);
+    Alert.alert('Salvo', 'Palavra-passe salva! Tente sincronizar novamente.');
+  };
 
   useEffect(() => {
     carregarDados();
@@ -71,19 +84,32 @@ export default function HomeScreen({ navigation }) {
     try {
       const memory = await getApiMemory();
       if (memory) {
-        const success = await handshake(memory.ip, memory.port);
-        if (success) {
-           setApiUrl(memory.ip, memory.port);
-           setShowAutoConnect(false);
-           Alert.alert('Reconectado!', `Você foi reconectado ao servidor ${memory.ip} automaticamente.`);
-           return;
+        try {
+          const success = await handshake(memory.ip, memory.port);
+          if (success) {
+             setApiUrl(memory.ip, memory.port);
+             setShowAutoConnect(false);
+             Alert.alert('Reconectado!', `Você foi reconectado ao servidor ${memory.ip} automaticamente.`);
+             return;
+          }
+        } catch (err) {
+          if (err.message === 'UNAUTHORIZED') {
+            setApiUrl(memory.ip, memory.port);
+            setShowAutoConnect(false);
+            setShowPasswordPrompt(true);
+            return;
+          }
         }
       }
       
       const serverInfo = await scanNetworkForServer();
       setApiUrl(serverInfo.ip, serverInfo.port);
       setShowAutoConnect(false);
-      Alert.alert('Sucesso', `Novo servidor encontrado: ${serverInfo.ip}`);
+      if (serverInfo.needsAuth) {
+        setShowPasswordPrompt(true);
+      } else {
+        Alert.alert('Sucesso', `Novo servidor encontrado: ${serverInfo.ip}`);
+      }
     } catch (error) {
       Alert.alert('Falha', 'Não foi possível encontrar o computador na rede atual. Você continuará offline.');
       setShowAutoConnect(false);
@@ -134,7 +160,11 @@ export default function HomeScreen({ navigation }) {
       carregarDados();
     } catch (error) {
       console.error(error);
-      Alert.alert('Falha', error.message || 'Erro ao enviar dados.');
+      if (error.message === 'UNAUTHORIZED') {
+        setShowPasswordPrompt(true);
+      } else {
+        Alert.alert('Falha', error.message || 'Erro ao enviar dados.');
+      }
     } finally {
       setSyncing(false);
     }
@@ -149,7 +179,11 @@ export default function HomeScreen({ navigation }) {
       carregarDados();
     } catch (error) {
       console.error(error);
-      Alert.alert('Falha', error.message || 'Erro ao baixar dados.');
+      if (error.message === 'UNAUTHORIZED') {
+        setShowPasswordPrompt(true);
+      } else {
+        Alert.alert('Falha', error.message || 'Erro ao baixar dados.');
+      }
     } finally {
       setSyncing(false);
     }
@@ -173,7 +207,11 @@ export default function HomeScreen({ navigation }) {
       carregarDados();
     } catch (error) {
       console.error(error);
-      Alert.alert('Falha', error.message || 'Erro na sincronização geral.');
+      if (error.message === 'UNAUTHORIZED') {
+        setShowPasswordPrompt(true);
+      } else {
+        Alert.alert('Falha', error.message || 'Erro na sincronização geral.');
+      }
     } finally {
       setSyncing(false);
     }
@@ -200,7 +238,11 @@ export default function HomeScreen({ navigation }) {
     try {
       const serverInfo = await scanNetworkForServer();
       setApiUrl(serverInfo.ip, serverInfo.port);
-      Alert.alert('Sucesso', `Servidor encontrado: ${serverInfo.ip}`);
+      if (serverInfo.needsAuth) {
+        setShowPasswordPrompt(true);
+      } else {
+        Alert.alert('Sucesso', `Servidor encontrado: ${serverInfo.ip}`);
+      }
     } catch (error) {
       Alert.alert('Falha no Scan', error.message);
     } finally {
@@ -249,7 +291,8 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
         <TouchableOpacity style={styles.settingsBtn} onPress={() => navigation.navigate('QRScanner')}>
-          <Text style={styles.settingsBtnText}>⚙️ Servidor</Text>
+          <Settings size={18} color="#fff" style={{ marginRight: 6 }} />
+          <Text style={styles.settingsBtnText}>Servidor</Text>
         </TouchableOpacity>
       </View>
 
@@ -321,7 +364,9 @@ export default function HomeScreen({ navigation }) {
                 style={[styles.actionCard, { backgroundColor: '#4f46e5' }]} 
                 onPress={() => navigation.navigate('BarcodeScanner', { acao: 'SEPARACAO' })}
               >
-                <Text style={styles.actionIcon}>📤</Text>
+                <View style={styles.actionIconContainer}>
+                  <Upload size={24} color="#fff" />
+                </View>
                 <Text style={styles.actionText}>Liberar Item</Text>
               </TouchableOpacity>
 
@@ -329,7 +374,9 @@ export default function HomeScreen({ navigation }) {
                 style={[styles.actionCard, { backgroundColor: '#10b981' }]} 
                 onPress={() => navigation.navigate('BarcodeScanner', { acao: 'DEVOLUCAO' })}
               >
-                <Text style={styles.actionIcon}>📥</Text>
+                <View style={styles.actionIconContainer}>
+                  <Download size={24} color="#fff" />
+                </View>
                 <Text style={styles.actionText}>Devolver Item</Text>
               </TouchableOpacity>
 
@@ -337,7 +384,9 @@ export default function HomeScreen({ navigation }) {
                 style={[styles.actionCard, { backgroundColor: '#f59e0b' }]} 
                 onPress={() => navigation.navigate('CadastrarEquipamento')}
               >
-                <Text style={styles.actionIcon}>➕</Text>
+                <View style={styles.actionIconContainer}>
+                  <PlusCircle size={24} color="#fff" />
+                </View>
                 <Text style={styles.actionText}>Novo Aparelho</Text>
               </TouchableOpacity>
             </View>
@@ -351,22 +400,28 @@ export default function HomeScreen({ navigation }) {
               {API_URL ? (
                 <Text style={styles.syncIpText}>Computador: {API_URL}</Text>
               ) : (
-                <Text style={styles.syncIpTextWarning}>⚠️ Computador não conectado</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <AlertTriangle size={16} color="#c5221f" style={{ marginRight: 6 }} />
+                  <Text style={styles.syncIpTextWarning}>Computador não conectado</Text>
+                </View>
               )}
               <View style={{ flexDirection: 'column', gap: 10, marginTop: 14 }}>
                 <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#f59e0b' }]} onPress={handleScan} disabled={scanning}>
                   <Text style={styles.syncButtonText}>{scanning ? 'Buscando...' : 'Scan de Rede'}</Text>
                 </TouchableOpacity>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#3b82f6' }]} onPress={handleSyncPushOnly} disabled={syncing}>
-                    <Text style={styles.syncButtonText}>📤 Enviar Sync</Text>
+                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncPushOnly} disabled={syncing}>
+                    <Upload size={16} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.syncButtonText}>Enviar Sync</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#10b981' }]} onPress={handleSyncPullOnly} disabled={syncing}>
-                    <Text style={styles.syncButtonText}>📥 Receber Sync</Text>
+                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncPullOnly} disabled={syncing}>
+                    <Download size={16} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.syncButtonText}>Receber Sync</Text>
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#8b5cf6' }]} onPress={handleSyncInteligente} disabled={syncing}>
-                  <Text style={styles.syncButtonText}>{syncing ? 'Processando...' : '🔄 Sync Inteligente (Geral)'}</Text>
+                <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#8b5cf6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncInteligente} disabled={syncing}>
+                  <RefreshCw size={16} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.syncButtonText}>{syncing ? 'Processando...' : 'Sync Inteligente (Geral)'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -425,7 +480,7 @@ export default function HomeScreen({ navigation }) {
                         <Image source={{ uri: item.fotoUrl.startsWith('/uploads') ? `${API_URL}${item.fotoUrl}` : item.fotoUrl }} style={styles.itemThumb} />
                       ) : (
                         <View style={styles.itemThumbPlaceholder}>
-                          <Text style={styles.itemThumbPlaceholderText}>📦</Text>
+                          <Package size={24} color="#94a3b8" />
                         </View>
                       )}
                       <View style={styles.itemDetails}>
@@ -446,11 +501,13 @@ export default function HomeScreen({ navigation }) {
                       </View>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-                      <TouchableOpacity style={{ marginRight: 10, padding: 4 }} onPress={() => imprimirEtiqueta(item, '58mm')}>
-                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>🖨️ Etiqueta 58mm</Text>
+                      <TouchableOpacity style={{ marginRight: 10, padding: 4, flexDirection: 'row', alignItems: 'center' }} onPress={() => imprimirEtiqueta(item, '58mm')}>
+                        <Printer size={12} color="#1a73e8" style={{ marginRight: 4 }} />
+                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>Etiqueta 58mm</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={{ padding: 4 }} onPress={() => imprimirEtiqueta(item, '80mm')}>
-                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>🖨️ 80mm</Text>
+                      <TouchableOpacity style={{ padding: 4, flexDirection: 'row', alignItems: 'center' }} onPress={() => imprimirEtiqueta(item, '80mm')}>
+                        <Printer size={12} color="#1a73e8" style={{ marginRight: 4 }} />
+                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>80mm</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -530,14 +587,17 @@ export default function HomeScreen({ navigation }) {
                 </View>
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginRight: 4, backgroundColor: '#475569', paddingVertical: 8 }]} onPress={() => handlePrint(item, 'A4')}>
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>🖨️ A4</Text>
+                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginRight: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, 'A4')}>
+                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>A4</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginHorizontal: 4, backgroundColor: '#475569', paddingVertical: 8 }]} onPress={() => handlePrint(item, '58mm')}>
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>🖨️ 58mm</Text>
+                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginHorizontal: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '58mm')}>
+                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>58mm</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginLeft: 4, backgroundColor: '#475569', paddingVertical: 8 }]} onPress={() => handlePrint(item, '80mm')}>
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>🖨️ 80mm</Text>
+                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginLeft: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '80mm')}>
+                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>80mm</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -582,8 +642,9 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.actionsHeaderRow}>
               <Text style={styles.actionsSubtitle}>Operações Realizadas Offline</Text>
               {offlineLogs.length > 0 && (
-                <TouchableOpacity style={[styles.clearBtn, { backgroundColor: '#3b82f6' }]} onPress={handleSyncPushOnly}>
-                  <Text style={styles.clearBtnText}>📤 Enviar Sync</Text>
+                <TouchableOpacity style={[styles.clearBtn, { backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center' }]} onPress={handleSyncPushOnly}>
+                  <Upload size={14} color="#fff" style={{ marginRight: 4 }} />
+                  <Text style={styles.clearBtnText}>Enviar Sync</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -595,9 +656,9 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.logCard}>
                   <View style={styles.logHeader}>
                     <Text style={styles.logActionType}>
-                      {item.tipo === 'SEPARACAO' && '📤 LIBERAÇÃO'}
-                      {item.tipo === 'DEVOLUCAO' && '📥 DEVOLUÇÃO'}
-                      {item.tipo === 'NOVO_EQUIPAMENTO' && '➕ NOVO CADASTRO'}
+                      {item.tipo === 'SEPARACAO' && 'LIBERAÇÃO'}
+                      {item.tipo === 'DEVOLUCAO' && 'DEVOLUÇÃO'}
+                      {item.tipo === 'NOVO_EQUIPAMENTO' && 'NOVO CADASTRO'}
                     </Text>
                     <Text style={styles.logTime}>
                       {new Date(item.data).toLocaleTimeString('pt-BR')}
@@ -649,6 +710,36 @@ export default function HomeScreen({ navigation }) {
         </View>
       </Modal>
 
+      {/* MODAL SENHA */}
+      <Modal visible={showPasswordPrompt} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Autenticação Necessária</Text>
+            <Text style={styles.modalText}>
+              Este servidor exige uma "Palavra-Passe" de sincronização para transmitir os dados com segurança.
+            </Text>
+            
+            <TextInput
+              style={[styles.searchInput, { width: '100%', marginVertical: 15, textAlign: 'center' }]}
+              placeholder="Digite a Palavra-passe"
+              secureTextEntry
+              value={syncPassword}
+              onChangeText={setSyncPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#f1f5f9' }]} onPress={() => setShowPasswordPrompt(false)}>
+                <Text style={[styles.modalBtnText, { color: '#64748b' }]}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#10b981' }]} onPress={handleSavePassword}>
+                <Text style={styles.modalBtnText}>Salvar e Autenticar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }

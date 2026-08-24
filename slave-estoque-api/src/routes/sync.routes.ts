@@ -67,7 +67,23 @@ function getLocalIpAddresses(): string[] {
   return Array.from(new Set(ips));
 }
 
-// 1. Gera o Payload Criptografado para o QR Code
+// Middleware de Proteção por Palavra Passe
+async function checkSyncPassword(req: any, res: any, next: any) {
+  try {
+    const config = await prisma.configuracao.findUnique({ where: { chave: 'sync_password' } });
+    if (config && config.valor && config.valor.trim() !== '') {
+      const clientPassword = req.headers['x-sync-password'];
+      if (clientPassword !== config.valor) {
+        return res.status(401).json({ error: 'Senha de sincronização inválida.' });
+      }
+    }
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: 'Erro ao validar segurança.' });
+  }
+}
+
+// 1. Gera o Payload Criptografado para o QR Code (Sem senha para permitir a exibição no PWA)
 router.get('/qr-payload', (req, res) => {
   const ips = getLocalIpAddresses();
   const port = Number(process.env.PORT) || 3333;
@@ -79,7 +95,7 @@ router.get('/qr-payload', (req, res) => {
 });
 
 // 2. Rota de PING (Para Discovery Local via HTTP / Handshake do QR Code)
-router.get('/ping', (req, res) => {
+router.get('/ping', checkSyncPassword, (req, res) => {
   res.json({ 
     service: 'slave-estoque-server', 
     version: '1.0', 
@@ -88,7 +104,7 @@ router.get('/ping', (req, res) => {
 });
 
 // 3. Rota de PULL (Mobile baixa dados)
-router.get('/pull', async (req, res) => {
+router.get('/pull', checkSyncPassword, async (req, res) => {
   try {
     const [
       equipamentos,
@@ -141,7 +157,7 @@ router.get('/pull', async (req, res) => {
 });
 
 // 4. Rota de PUSH (Mobile envia dados sincronizados)
-router.post('/push', async (req, res) => {
+router.post('/push', checkSyncPassword, async (req, res) => {
   try {
     const { acoes } = req.body;
     

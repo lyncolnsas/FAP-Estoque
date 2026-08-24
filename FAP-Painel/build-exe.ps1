@@ -40,6 +40,8 @@ Write-Host "`n[3/4] Preparando API e Prisma Isolado..."
 Set-Location $ApiDest
 npm install
 npx prisma generate
+npx tsc
+if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar a API" }
 
 # 4. Compilar EXE com Electron Builder
 Write-Host "`n[4/4] Compilando arquivo .exe do Painel..."

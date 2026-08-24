@@ -13,6 +13,17 @@ export const setApiUrl = (ip, port) => {
   AsyncStorage.setItem('LAST_API_PORT', String(port)).catch(console.error);
 };
 
+export const getSyncHeaders = async (extraHeaders = {}) => {
+  const headers = { ...extraHeaders };
+  try {
+    const pwd = await AsyncStorage.getItem('SYNC_PASSWORD');
+    if (pwd) {
+      headers['x-sync-password'] = pwd;
+    }
+  } catch(e) {}
+  return headers;
+};
+
 export const getApiMemory = async () => {
   try {
     const ip = await AsyncStorage.getItem('LAST_API_IP');
@@ -46,13 +57,19 @@ export const handshake = async (ip, port) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout
     
+    const headers = await getSyncHeaders({ 'Accept': 'application/json' });
+
     const res = await fetch(`http://${ip}:${port}/sync/ping`, {
       method: 'GET',
       signal: controller.signal,
-      headers: { 'Accept': 'application/json' }
+      headers
     });
     
     clearTimeout(timeoutId);
+    
+    if (res.status === 401) {
+      throw new Error('UNAUTHORIZED');
+    }
     
     if (res.ok) {
       const data = await res.json();
@@ -68,7 +85,13 @@ export const handshake = async (ip, port) => {
 export const syncPull = async () => {
   if (!API_URL) throw new Error('Servidor não configurado. Leia o QR Code.');
 
-  const res = await fetch(`${API_URL}/sync/pull`);
+  const headers = await getSyncHeaders();
+  const res = await fetch(`${API_URL}/sync/pull`, { headers });
+  
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
   const data = await res.json();
 
   db.execSync('DELETE FROM Equipamento WHERE synced = 1');
@@ -187,11 +210,17 @@ export const syncPush = async () => {
     return { success: true, message: 'Nenhuma ação válida para enviar.' };
   }
 
+  const headers = await getSyncHeaders({ 'Content-Type': 'application/json' });
+
   const res = await fetch(`${API_URL}/sync/push`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ acoes })
   });
+  
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
   
   const result = await res.json();
   if (result.success) {

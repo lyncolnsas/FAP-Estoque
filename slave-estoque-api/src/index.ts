@@ -22,6 +22,8 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 app.use('/uploads', express.static(uploadDir));
 
+app.get('/favicon.ico', (req, res) => res.sendFile(path.join(__dirname, '../favicon.ico')));
+
 app.use('/auth', authRoutes);
 app.use('/usuarios', authRoutes); // Opcional, mantendo compatibilidade
 app.use('/reservas-locais', reservasRoutes);

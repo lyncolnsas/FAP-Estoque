@@ -13,6 +13,7 @@ export default function AdminIntegracoes() {
 
   // Sync Mobile State
   const [syncQr, setSyncQr] = useState<string | null>(null);
+  const [syncPassword, setSyncPassword] = useState('');
 
   // Email State
   const [smtpHost, setSmtpHost] = useState('');
@@ -50,6 +51,14 @@ export default function AdminIntegracoes() {
       if (syncRes.ok) {
         const syncData = await syncRes.json();
         setSyncQr(syncData.encryptedPayload);
+      }
+
+      const passRes = await fetch(api('/configuracoes/sync-password'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (passRes.ok) {
+        const passData = await passRes.json();
+        setSyncPassword(passData.password);
       }
     } catch (err) {
       console.error('Erro ao carregar integrações:', err);
@@ -126,6 +135,28 @@ export default function AdminIntegracoes() {
     }
   };
 
+  const salvarSyncPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(api('/configuracoes/sync-password'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ password: syncPassword || '' })
+      });
+      if (res.ok) {
+        toast.success('Senha de sincronização salva!');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData.error || 'Erro ao salvar senha.');
+      }
+    } catch (error) {
+      toast.error('Erro de conexão.');
+    }
+  };
+
   const limparPedidos = () => {
     const code = window.prompt("Digite 'CONFIRMAR' para apagar todas as requisições e reservas do sistema. Essa ação não pode ser desfeita!");
     if (code !== 'CONFIRMAR') {
@@ -177,6 +208,21 @@ export default function AdminIntegracoes() {
                 <div className="bg-white p-4 rounded-xl border inline-block shadow-sm">
                   <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(syncQr)}`} alt="App Sync QR Code" className="mx-auto" />
                 </div>
+                
+                <form onSubmit={salvarSyncPassword} className="mt-6 w-full max-w-sm border-t border-slate-100 pt-6">
+                  <label className="block text-sm font-medium text-slate-700 mb-2 text-left">Palavra-passe de Autenticação</label>
+                  <div className="flex gap-2">
+                    <input 
+                      value={syncPassword} 
+                      onChange={e => setSyncPassword(e.target.value)} 
+                      type="text" 
+                      placeholder="Deixe vazio para login livre" 
+                      className="flex-1 rounded-xl border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-4 py-2" 
+                    />
+                    <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm">Salvar</button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2 text-left">Se configurado, o aplicativo só poderá sincronizar dados enviando esta senha exata.</p>
+                </form>
               </div>
             ) : (
               <div className="text-center text-slate-500 animate-pulse">

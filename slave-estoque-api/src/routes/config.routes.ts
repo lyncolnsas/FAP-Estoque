@@ -65,4 +65,29 @@ configRoutes.post('/whatsapp/desconectar', authMiddleware, authRole(['ADMIN']), 
   }
 });
 
+// --- SYNC PASSWORD ---
+configRoutes.get('/sync-password', authMiddleware, authRole(['ADMIN']), async (req, res) => {
+  try {
+    const config = await prisma.configuracao.findUnique({ where: { chave: 'sync_password' } });
+    res.json({ password: config ? config.valor : '' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar senha' });
+  }
+});
+
+configRoutes.post('/sync-password', authMiddleware, authRole(['ADMIN']), async (req, res) => {
+  try {
+    const password = req.body.password || '';
+    await prisma.configuracao.upsert({
+      where: { chave: 'sync_password' },
+      update: { valor: password },
+      create: { chave: 'sync_password', valor: password }
+    });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('ERRO AO SALVAR SENHA SYNC:', error);
+    res.status(500).json({ error: error.message || 'Erro ao salvar senha' });
+  }
+});
+
 export default configRoutes;
