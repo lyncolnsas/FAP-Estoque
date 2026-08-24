@@ -1,0 +1,27 @@
+{
+    "name":  "fap-painel",
+    "version":  "1.0.0",
+    "description":  "",
+    "main":  "main.js",
+    "scripts":  {
+                    "start":  "electron .",
+                    "build":  "electron-builder --config electron-builder.json"
+                },
+    "keywords":  [
+
+                 ],
+    "author":  "",
+    "license":  "ISC",
+    "type":  "commonjs",
+    "dependencies":  {
+                         "express":  "^5.2.1",
+                         "http-proxy-middleware":  "^4.2.0",
+                         "open":  "^11.0.1",
+                         "qrcode":  "^1.5.4"
+                     },
+    "devDependencies":  {
+                            "copyfiles":  "^2.4.1",
+                            "electron":  "^43.4.1",
+                            "electron-builder":  "^26.15.3"
+                        }
+}

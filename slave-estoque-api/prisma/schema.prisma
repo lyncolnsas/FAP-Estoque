@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Configuracao {
+  chave   String @id
+  valor   String
+}
+
+model Local {
+  id           String         @id @default(uuid())
+  nome         String         @unique
+  capacidade   Int            @default(0)
+  fotoUrl      String?
+  criadoEm     DateTime       @default(now())
+  
+  reservas     ReservaLocal[]
+  requisicoes  Requisicao[]
+}
+
+model ReservaLocal {
+  id           String       @id @default(uuid())
+  localId      String
+  usuarioId    String
+  dataInicio   DateTime
+  dataFim      DateTime
+  status       String       @default("AGUARDANDO") // AGUARDANDO, CONFIRMADA, CANCELADA
+  criadoEm     DateTime     @default(now())
+
+  local        Local        @relation(fields: [localId], references: [id])
+  usuario      Usuario      @relation(fields: [usuarioId], references: [id])
+}
+model Equipamento {
+  id                  String             @id @default(uuid())
+  codigoPatrimonio    String             @unique
+  nome                String
+  
+  categoriaId         String
+  tipoId              String
+  
+  statusCondicao      String             @default("DISPONIVEL")
+  recebeuComDefeito   Boolean            @default(false)
+  permitirEmprestimo  Boolean            @default(true)
+  quantidadeUso       Int                @default(0)
+  qrCodeUrl           String?
+  fotoUrl             String?
+  criadoEm            DateTime           @default(now())
+  atualizadoEm        DateTime           @updatedAt
+
+  categoria           Categoria          @relation(fields: [categoriaId], references: [id])
+  tipo                TipoEquipamento    @relation(fields: [tipoId], references: [id])
+
+  itensRequisicao     ItemRequisicao[]
+  historicoAvarias    HistoricoAvaria[]
+}
+
+model Categoria {
+  id        String   @id @default(uuid())
+  nome      String   @unique
+  criadoEm  DateTime @default(now())
+  
+  tipos         TipoEquipamento[]
+  equipamentos  Equipamento[]
+  usuariosPermitidos Usuario[] @relation("UsuarioCategorias")
+}
+
+model TipoEquipamento {
+  id          String   @id @default(uuid())
+  categoriaId String
+  nome        String
+  criadoEm    DateTime @default(now())
+
+  categoria    Categoria     @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+  equipamentos Equipamento[]
+}
+
+model Usuario {
+  id           String       @id @default(uuid())
+  nome         String
+  email        String       @unique
+  senhaHash    String
+  role         String       @default("SETOR") // ADMIN, ESTOQUISTA, SETOR
+  departamento String?
+  whatsapp     String?
+  corPersonalizada String?
+  criadoEm     DateTime     @default(now())
+
+  requisicoes  Requisicao[]
+  reservasLocais ReservaLocal[]
+  categoriasPermitidas Categoria[] @relation("UsuarioCategorias")
+}
+
+model Requisicao {
+  id                    String           @id @default(uuid())
+  solicitanteNome       String
+  solicitanteEmail      String?
+  solicitanteWhatsapp   String?
+  departamento          String
+  dataInicioEvento      DateTime
+  dataFimEvento         DateTime
+  dataRetiradaSugerida  DateTime
+  status                String           @default("PENDENTE")
+  tokenAceite           String?          @unique
+  lembreteDevolucaoEnviado Boolean       @default(false)
+  criadoEm              DateTime         @default(now())
+  atualizadoEm          DateTime         @updatedAt
+
+  usuarioId             String?
+  usuario               Usuario?         @relation(fields: [usuarioId], references: [id])
+
+  localId               String?
+  local                 Local?           @relation(fields: [localId], references: [id])
+  horarioOrganizacao    DateTime?
+  materialNecessario    String?
+
+  itens                 ItemRequisicao[]
+  historicoAvarias      HistoricoAvaria[]
+}
+
+model ItemRequisicao {
+  id              String       @id @default(uuid())
+  requisicaoId    String
+  equipamentoId   String
+  statusSeparacao Boolean      @default(false)
+  statusDevolucao Boolean      @default(false)
+  observacao      String?
+  
+  requisicao      Requisicao   @relation(fields: [requisicaoId], references: [id])
+  equipamento     Equipamento  @relation(fields: [equipamentoId], references: [id])
+}
+
+model HistoricoAvaria {
+  id              String       @id @default(uuid())
+  equipamentoId   String
+  requisicaoId    String?
+  tipoAvariaId    String?
+  descricao       String
+  resolvido       Boolean      @default(false)
+  dataRegistro    DateTime     @default(now())
+  dataResolucao   DateTime?
+
+  equipamento     Equipamento  @relation(fields: [equipamentoId], references: [id])
+  requisicao      Requisicao?  @relation(fields: [requisicaoId], references: [id])
+  tipoAvaria      TipoAvaria?  @relation(fields: [tipoAvariaId], references: [id])
+}
+
+model TipoAvaria {
+  id              String       @id @default(uuid())
+  nome            String       @unique
+  descricao       String?
+  criadoEm        DateTime     @default(now())
+
+  historicos      HistoricoAvaria[]
+}

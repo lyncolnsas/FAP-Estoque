@@ -1,0 +1,12 @@
+INFORMAÇÕES DE ASSINATURA - GOOGLE PLAY STORE
+=============================================
+Aplicativo: Emprestimos FAP
+
+Arquivo de Chave (.keystore): android\app\release.keystore
+Alias da Chave: release
+Senha do Arquivo (Store Password): fapestoque123
+Senha da Chave (Key Password): fapestoque123
+
+ATENÇÃO:
+Guarde este arquivo e as senhas com muito cuidado e não o exclua. 
+Se você perder o arquivo "release.keystore" ou essas senhas, não conseguirá mais enviar atualizações deste aplicativo para a Play Store no futuro. O Google não permite a recuperação dessas chaves.

@@ -1,0 +1,6 @@
+{
+  "appId": "br.com.slaveestoque.pwa",
+  "appName": "Slave Estoque",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

@@ -1,0 +1,32 @@
+# Pastas Temporárias e Compilação
+node_modules/
+temp_build/
+dist/
+build/
+
+# Variáveis de Ambiente e Segredos
+.env
+.env.local
+.env.*
+
+# Banco de Dados
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Mobile / Expo / React Native
+.expo/
+android/app/build/
+ios/build/
+*.apk
+*.aab
+
+# Logs e Misc
+npm-debug.log
+yarn-error.log
+*.log
+.DS_Store
+
+# Test Apps
+test-app/
+test-app2/

@@ -1,0 +1,36 @@
+{
+  "appId": "com.fap.estoque",
+  "productName": "Painel FAP",
+  "directories": {
+    "output": "dist"
+  },
+  "win": {
+    "target": ["nsis", "portable"],
+    "icon": "../img/icone.png"
+  },
+  "nsis": {
+    "include": "installer.nsh",
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "runAfterFinish": true,
+    "installerIcon": "../img/icone.ico",
+    "uninstallerIcon": "../img/icone.ico",
+    "installerHeaderIcon": "../img/icone.ico",
+    "installerSidebar": "../img/sidebar.bmp",
+    "uninstallerSidebar": "../img/sidebar.bmp"
+  },
+  "afterPack": "afterPack.js",
+  "extraResources": [
+    {
+      "from": "temp_build/api",
+      "to": "api",
+      "filter": ["**/*", "dist/**/*", ".env", "!.git", "!node_modules"]
+    },
+    {
+      "from": "temp_build/pwa/dist",
+      "to": "pwa"
+    }
+  ]
+}
