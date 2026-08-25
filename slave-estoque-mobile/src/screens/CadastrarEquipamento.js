@@ -1,758 +1,782 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
-  StyleSheet, 
-  Image, 
-  Alert, 
-  ScrollView, 
-  Switch, 
-  Modal, 
-  FlatList,
-  ActivityIndicator
-} from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { db } from '../db/database';
-import { imprimirEtiqueta } from '../services/printer';
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  Image, Alert, ScrollView, Modal, FlatList,
+  ActivityIndicator, SafeAreaView, Platform
+} from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import { db } from "../db/database";
+import { imprimirEtiqueta } from "../services/printer";
+import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
+import ImageCropModal from "../components/ImageCropModal";
+import {
+  Camera, Image as ImageIcon, Plus, CheckSquare,
+  Square, ChevronDown, Barcode, Trash2, X, RefreshCw,
+  Crop, Sliders
+} from "lucide-react-native";
 
 export default function CadastrarEquipamentoScreen({ navigation }) {
+  const keyboardHeight = useKeyboardHeight();
+
   // Form State
-  const [nome, setNome] = useState('');
-  const [codigoPatrimonio, setCodigoPatrimonio] = useState('');
-  const [categoriaId, setCategoriaId] = useState('');
-  const [tipoId, setTipoId] = useState('');
+  const [nome, setNome] = useState("");
+  const [quantidade, setQuantidade] = useState("1");
+  const [codigoPatrimonio, setCodigoPatrimonio] = useState("");
+  const [categoriaId, setCategoriaId] = useState("");
+  const [tipoId, setTipoId] = useState("");
   const [permitirEmprestimo, setPermitirEmprestimo] = useState(true);
   const [recebeuComDefeito, setRecebeuComDefeito] = useState(false);
-  const [avariaId, setAvariaId] = useState('');
-  const [avariaDescricao, setAvariaDescricao] = useState('');
+  const [avariaId, setAvariaId] = useState("");
+  const [avariaDescricao, setAvariaDescricao] = useState("");
   const [fotoUri, setFotoUri] = useState(null);
 
-  // Lists from DB
+  // Crop & Rotation Studio
+  const [cropImageRaw, setCropImageRaw] = useState(null);
+  const [showCropModal, setShowCropModal] = useState(false);
+
+  // Auxiliares
   const [categorias, setCategorias] = useState([]);
   const [tipos, setTipos] = useState([]);
   const [tiposAvaria, setTiposAvaria] = useState([]);
 
-  // UI State
-  const [pickerModalVisible, setPickerModalVisible] = useState(false);
-  const [pickerType, setPickerType] = useState(''); // 'CATEGORIA' | 'TIPO' | 'AVARIA'
-  const [scannerModalVisible, setScannerModalVisible] = useState(false);
-  const [isCameraReady, setIsCameraReady] = useState(false);
+  // Modais de Seleção
+  const [showModalCat, setShowModalCat] = useState(false);
+  const [showModalTipo, setShowModalTipo] = useState(false);
+  const [showModalAvaria, setShowModalAvaria] = useState(false);
+
+  // Modais de Criação Rápida
+  const [showModalCriarCat, setShowModalCriarCat] = useState(false);
+  const [showModalCriarTipo, setShowModalCriarTipo] = useState(false);
+  const [novaCatNome, setNovaCatNome] = useState("");
+  const [novoTipoNome, setNovoTipoNome] = useState("");
+
+  // Scanner
+  const [scannerVisible, setScannerVisible] = useState(false);
   const [hasCameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    carregarAuxiliares();
-  }, []);
-
-  const carregarAuxiliares = () => {
+  const carregarAuxiliares = useCallback(() => {
     try {
-      const cats = db.getAllSync('SELECT * FROM Categoria ORDER BY nome ASC');
-      const avarias = db.getAllSync('SELECT * FROM TipoAvaria ORDER BY nome ASC');
+      const cats = db.getAllSync("SELECT * FROM Categoria ORDER BY nome ASC");
+      const avarias = db.getAllSync("SELECT * FROM TipoAvaria ORDER BY nome ASC");
       setCategorias(cats);
       setTiposAvaria(avarias);
     } catch (e) {
-      console.error('Erro ao carregar tabelas auxiliares:', e);
+      console.error("Erro ao carregar tabelas auxiliares:", e);
     }
-  };
+  }, []);
 
-  const handleSelectCategoria = (catId) => {
-    setCategoriaId(catId);
-    setTipoId(''); // Reset tipo
+  useEffect(() => {
+    carregarAuxiliares();
+  }, [carregarAuxiliares]);
+
+  const handleSelectCategoria = (cat) => {
+    setCategoriaId(cat.id);
+    setTipoId("");
     try {
-      const filteredTipos = db.getAllSync('SELECT * FROM TipoEquipamento WHERE categoriaId = ? ORDER BY nome ASC', [catId]);
+      const filteredTipos = db.getAllSync(
+        "SELECT * FROM TipoEquipamento WHERE categoriaId = ? ORDER BY nome ASC",
+        [cat.id]
+      );
       setTipos(filteredTipos);
     } catch (e) {
-      console.error('Erro ao carregar tipos para categoria:', e);
+      console.error("Erro ao carregar tipos:", e);
     }
-  };
-
-  const processImage = async (uri) => {
-    try {
-      const manipResult = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ resize: { width: 800 } }], // Reduz a resolução
-        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG } // Compressão forte para ficar < 500kb
-      );
-      setFotoUri(manipResult.uri);
-    } catch (e) {
-      console.error('Erro ao comprimir imagem:', e);
-      setFotoUri(uri);
-    }
+    setShowModalCat(false);
   };
 
   const tirarFoto = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permissão', 'É necessária permissão para usar a câmera.');
-      return;
+      return Alert.alert("Permissão", "É necessária permissão para usar a câmera.");
     }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.5,
+      allowsEditing: false,
+      quality: 0.9,
     });
-    if (!result.canceled) {
-      await processImage(result.assets[0].uri);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setCropImageRaw(result.assets[0].uri);
+      setShowCropModal(true);
     }
   };
 
   const escolherGaleria = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permissão', 'É necessária permissão para acessar a galeria.');
-      return;
+      return Alert.alert("Permissão", "É necessária permissão para acessar a galeria.");
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.5,
+      allowsEditing: false,
+      quality: 0.9,
     });
-    if (!result.canceled) {
-      await processImage(result.assets[0].uri);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setCropImageRaw(result.assets[0].uri);
+      setShowCropModal(true);
     }
   };
 
-  const abrirScanner = async () => {
-    if (!hasCameraPermission || !hasCameraPermission.granted) {
-      const res = await requestCameraPermission();
-      if (!res.granted) {
-        Alert.alert('Permissão', 'É necessário acesso à câmera para ler código de barras.');
-        return;
-      }
+  const gerarCodigoBase = () => {
+    if (!nome.trim()) return "EQ";
+    return nome
+      .replace(/[^a-zA-Z0-9 ]/g, "")
+      .split(" ")
+      .filter(n => n.length > 0)
+      .map(n => n.substring(0, 3).toUpperCase())
+      .slice(0, 2)
+      .join("-");
+  };
+
+  const gerarPatrimonioUnico = () => {
+    if (!nome.trim()) {
+      return Alert.alert("Atenção", "Digite o nome do equipamento primeiro.");
     }
-    setScannerModalVisible(true);
-    setTimeout(() => {
-      setIsCameraReady(true);
-    }, 400); // Wait for modal animation
-  };
-
-  const fecharScanner = () => {
-    setIsCameraReady(false);
-    setScannerModalVisible(false);
-  };
-
-  const handleBarcodeScanned = ({ data }) => {
-    setCodigoPatrimonio(data);
-    fecharScanner();
-  };
-
-  const gerarPatrimonio = () => {
-    if (!nome) {
-      Alert.alert('Atenção', 'Digite o nome do equipamento primeiro para gerar o código corretamente.');
-      return;
-    }
-    const prefix = nome.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(n => n.length > 0).map(n => n.substring(0, 3).toUpperCase()).slice(0, 2).join('-');
-    const randomCode = prefix + '-' + Math.floor(Math.random() * 90000 + 10000);
+    const prefix = gerarCodigoBase();
+    const randomCode = `${prefix}-${Math.floor(Math.random() * 90000 + 10000)}`;
     setCodigoPatrimonio(randomCode);
   };
 
-  const salvarOffline = () => {
-    if (!nome || !codigoPatrimonio) {
-      Alert.alert('Atenção', 'Preencha o nome e o código de patrimônio.');
-      return;
+  const handleCriarCategoriaRapida = () => {
+    if (!novaCatNome.trim()) return Alert.alert("Atenção", "Digite o nome da categoria.");
+    const id = `cat-${Date.now()}`;
+    const nomeUp = novaCatNome.trim().toUpperCase();
+    try {
+      db.runSync("INSERT INTO Categoria (id, nome) VALUES (?, ?)", [id, nomeUp]);
+      db.runSync(
+        "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
+        ["NOVA_CATEGORIA", id, JSON.stringify({ id, nome: nomeUp }), new Date().toISOString()]
+      );
+      carregarAuxiliares();
+      setCategoriaId(id);
+      setNovaCatNome("");
+      setShowModalCriarCat(false);
+      Alert.alert("Sucesso", `Categoria "${nomeUp}" criada e selecionada!`);
+    } catch (e) {
+      Alert.alert("Erro", "Falha ao criar categoria.");
+    }
+  };
+
+  const handleCriarTipoRapido = () => {
+    if (!categoriaId) return Alert.alert("Atenção", "Selecione a categoria primeiro.");
+    if (!novoTipoNome.trim()) return Alert.alert("Atenção", "Digite o nome do subtipo.");
+    const id = `tip-${Date.now()}`;
+    const nomeTipo = novoTipoNome.trim();
+    try {
+      db.runSync("INSERT INTO TipoEquipamento (id, categoriaId, nome) VALUES (?, ?, ?)", [id, categoriaId, nomeTipo]);
+      db.runSync(
+        "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
+        ["NOVO_TIPO_EQUIPAMENTO", id, JSON.stringify({ id, categoriaId, nome: nomeTipo }), new Date().toISOString()]
+      );
+      const filteredTipos = db.getAllSync(
+        "SELECT * FROM TipoEquipamento WHERE categoriaId = ? ORDER BY nome ASC",
+        [categoriaId]
+      );
+      setTipos(filteredTipos);
+      setTipoId(id);
+      setNovoTipoNome("");
+      setShowModalCriarTipo(false);
+      Alert.alert("Sucesso", `Subtipo "${nomeTipo}" criado e selecionado!`);
+    } catch (e) {
+      Alert.alert("Erro", "Falha ao criar subtipo.");
+    }
+  };
+
+  const handleSalvarEquipamento = () => {
+    if (!nome.trim()) {
+      return Alert.alert("Atenção", "Preencha o nome do equipamento.");
+    }
+    const qty = parseInt(quantidade, 10) || 1;
+    if (qty < 1) {
+      return Alert.alert("Atenção", "A quantidade deve ser pelo menos 1.");
+    }
+    if (qty === 1 && !codigoPatrimonio.trim()) {
+      return Alert.alert("Atenção", "Informe ou gere o código de patrimônio.");
     }
     if (recebeuComDefeito && !avariaId) {
-      Alert.alert('Atenção', 'Selecione o tipo de avaria.');
-      return;
+      return Alert.alert("Atenção", "Selecione o tipo de avaria inicial.");
     }
 
+    setSaving(true);
     try {
-      const idOffline = 'eq-' + Math.random().toString(36).substring(7);
-      const statusCondicao = recebeuComDefeito ? 'COM_DEFEITO' : 'DISPONIVEL';
+      const prefix = gerarCodigoBase();
+      const statusCondicao = recebeuComDefeito ? "COM_DEFEITO" : "DISPONIVEL";
+      const baseNum = Math.floor(Math.random() * 80000 + 10000);
+      const itensCriados = [];
 
-      // Salva no banco SQLite local
-      db.runSync(`
-        INSERT INTO Equipamento (id, codigoPatrimonio, nome, categoriaId, tipoId, statusCondicao, permitirEmprestimo, recebeuComDefeito, fotoUrl, synced)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `, [
-        idOffline, 
-        codigoPatrimonio, 
-        nome, 
-        categoriaId || '', 
-        tipoId || '', 
-        statusCondicao, 
-        permitirEmprestimo ? 1 : 0, 
-        recebeuComDefeito ? 1 : 0,
-        fotoUri
-      ]);
+      for (let i = 0; i < qty; i++) {
+        const idOffline = `eq-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`;
+        const code = qty === 1 ? codigoPatrimonio.trim() : `${prefix}-${baseNum + i}`;
 
-      // Se tiver avaria inicial, insere localmente na tabela HistoricoAvaria
-      if (recebeuComDefeito) {
-        const idAvaria = 'av-' + Math.random().toString(36).substring(7);
-        db.runSync(`
-          INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro)
-          VALUES (?, ?, null, ?, ?, 0, ?)
-        `, [
-          idAvaria,
-          idOffline,
-          avariaId,
-          avariaDescricao || 'Defeito inicial cadastrado via app offline',
-          new Date().toISOString()
-        ]);
+        db.runSync(
+          `INSERT INTO Equipamento (id, codigoPatrimonio, nome, categoriaId, tipoId, statusCondicao, permitirEmprestimo, recebeuComDefeito, fotoUrl, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          [
+            idOffline, code, nome.trim(), categoriaId || "", tipoId || "",
+            statusCondicao, permitirEmprestimo ? 1 : 0, recebeuComDefeito ? 1 : 0, fotoUri
+          ]
+        );
+
+        if (recebeuComDefeito) {
+          const idAvaria = `av-${Date.now()}-${i}`;
+          db.runSync(
+            `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro)
+             VALUES (?, ?, null, ?, ?, 0, ?)`,
+            [idAvaria, idOffline, avariaId, avariaDescricao.trim() || "Defeito inicial cadastrado no app", new Date().toISOString()]
+          );
+        }
+
+        const payload = JSON.stringify({
+          id: idOffline,
+          nome: nome.trim(),
+          codigoPatrimonio: code,
+          categoriaId: categoriaId || "",
+          tipoId: tipoId || "",
+          statusCondicao,
+          permitirEmprestimo,
+          recebeuComDefeito,
+          avariaId: recebeuComDefeito ? avariaId : null,
+          avariaDescricao: recebeuComDefeito ? avariaDescricao : null,
+          fotoUrl: fotoUri
+        });
+
+        db.runSync(
+          `INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)`,
+          ["NOVO_EQUIPAMENTO", idOffline, payload, new Date().toISOString()]
+        );
+
+        itensCriados.push({ nome: nome.trim(), codigoPatrimonio: code });
       }
 
-      // Cria a ação no OfflineLog
-      const payload = JSON.stringify({
-        id: idOffline,
-        nome,
-        codigoPatrimonio,
-        categoriaId: categoriaId || '',
-        tipoId: tipoId || '',
-        statusCondicao,
-        permitirEmprestimo,
-        recebeuComDefeito,
-        avariaId: recebeuComDefeito ? avariaId : null,
-        avariaDescricao: recebeuComDefeito ? avariaDescricao : null,
-        fotoUrl: fotoUri
-      });
-
-      db.runSync(`INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)`, 
-        ['NOVO_EQUIPAMENTO', idOffline, payload, new Date().toISOString()]);
-
       Alert.alert(
-        'Sucesso', 
-        'Equipamento salvo offline! Deseja imprimir a etiqueta agora?',
+        "Cadastro Realizado!",
+        qty === 1
+          ? `Equipamento "${nome}" salvo offline!\nDeseja imprimir a etiqueta?`
+          : `${qty} equipamentos salvos com sucesso em lote!`,
         [
-          { text: 'Não', onPress: () => navigation.goBack() },
-          { text: 'Sim (58mm)', onPress: async () => { await imprimirEtiqueta({ nome, codigoPatrimonio }, '58mm'); navigation.goBack(); } },
-          { text: 'Sim (80mm)', onPress: async () => { await imprimirEtiqueta({ nome, codigoPatrimonio }, '80mm'); navigation.goBack(); } }
+          { text: "Concluir", onPress: () => navigation.goBack() },
+          {
+            text: "Imprimir Etiqueta (58mm)",
+            onPress: async () => {
+              for (const item of itensCriados) {
+                await imprimirEtiqueta(item, "58mm");
+              }
+              navigation.goBack();
+            }
+          }
         ]
       );
-    } catch (error) {
-      console.error(error);
-      Alert.alert('Erro', 'Não foi possível salvar o equipamento offline.');
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Erro", "Não foi possível cadastrar o equipamento.");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const getNomeCategoria = () => {
-    const cat = categorias.find(c => c.id === categoriaId);
-    return cat ? cat.nome : 'Selecione uma Categoria';
-  };
-
-  const getNomeTipo = () => {
-    const t = tipos.find(x => x.id === tipoId);
-    return t ? t.nome : 'Selecione um Tipo';
-  };
-
-  const getNomeAvaria = () => {
-    const a = tiposAvaria.find(x => x.id === avariaId);
-    return a ? a.nome : 'Selecione o Tipo de Avaria';
-  };
-
-  const showPicker = (type) => {
-    if (type === 'TIPO' && !categoriaId) {
-      Alert.alert('Aviso', 'Selecione uma Categoria primeiro.');
-      return;
-    }
-    setPickerType(type);
-    setPickerModalVisible(true);
-  };
-
-  const selectPickerItem = (item) => {
-    if (pickerType === 'CATEGORIA') {
-      handleSelectCategoria(item.id);
-    } else if (pickerType === 'TIPO') {
-      setTipoId(item.id);
-    } else if (pickerType === 'AVARIA') {
-      setAvariaId(item.id);
-    }
-    setPickerModalVisible(false);
-  };
-
-  const getPickerData = () => {
-    if (pickerType === 'CATEGORIA') return categorias;
-    if (pickerType === 'TIPO') return tipos;
-    if (pickerType === 'AVARIA') return tiposAvaria;
-    return [];
-  };
+  const catSelecionada = categorias.find(c => c.id === categoriaId);
+  const tipoSelecionado = tipos.find(t => t.id === tipoId);
+  const avariaSelecionada = tiposAvaria.find(a => a.id === avariaId);
+  const qtyNum = parseInt(quantidade, 10) || 1;
 
   return (
-    <View style={styles.mainContainer}>
-      <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Informações Gerais</Text>
+    <SafeAreaView style={styles.container}>
+      <View style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={[styles.scroll, { paddingBottom: Math.max(140, keyboardHeight + 80) }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* FOTO COM AJUSTE DE ROTAÇÃO E CORTE QUADRADO */}
+          <Text style={styles.sectionLabel}>Foto (Formato Quadrado 1:1)</Text>
+          {fotoUri ? (
+            <View style={styles.squarePhotoWrapper}>
+              <View style={styles.squarePhotoContainer}>
+                <Image source={{ uri: fotoUri }} style={styles.squarePhoto} resizeMode="cover" />
+              </View>
+              <View style={styles.photoControlsRow}>
+                <TouchableOpacity
+                  style={styles.photoControlBtn}
+                  onPress={() => {
+                    setCropImageRaw(fotoUri);
+                    setShowCropModal(true);
+                  }}
+                >
+                  <Crop size={16} color="#4f46e5" />
+                  <Text style={styles.photoControlBtnText}>Recortar / Girar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.photoControlBtn} onPress={tirarFoto}>
+                  <Camera size={16} color="#2563eb" />
+                  <Text style={styles.photoControlBtnText}>Nova Foto</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.photoControlBtn, { backgroundColor: "#fef2f2", borderColor: "#fecaca" }]}
+                  onPress={() => setFotoUri(null)}
+                >
+                  <Trash2 size={16} color="#dc2626" />
+                  <Text style={[styles.photoControlBtnText, { color: "#dc2626" }]}>Remover</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.photoPickerBox}>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <TouchableOpacity style={styles.photoActionBtn} onPress={tirarFoto}>
+                  <Camera size={20} color="#4f46e5" />
+                  <Text style={styles.photoActionBtnText}>Tirar Foto</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.photoActionBtn} onPress={escolherGaleria}>
+                  <ImageIcon size={20} color="#4f46e5" />
+                  <Text style={styles.photoActionBtnText}>Galeria</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.photoHelperText}>Giro gradual -180° a +180° e enquadramento quadrado</Text>
+            </View>
+          )}
 
-          <Text style={styles.label}>Nome do Equipamento *</Text>
-          <TextInput 
-            style={styles.input} 
-            value={nome} 
-            onChangeText={setNome} 
-            placeholder="Ex: Projetor Epson X41" 
+          {/* NOME */}
+          <Text style={styles.sectionLabel}>Nome do Material / Equipamento</Text>
+          <TextInput
+            style={styles.input}
+            value={nome}
+            onChangeText={setNome}
+            placeholder="Ex: Câmera Sony A7III, Microfone Hollyland..."
             placeholderTextColor="#94a3b8"
+            autoCapitalize="words"
           />
 
-          <Text style={styles.label}>Código de Patrimônio *</Text>
-          <View style={styles.patrimonyRow}>
-            <TextInput 
-              style={[styles.input, styles.patrimonyInput]} 
-              value={codigoPatrimonio} 
-              onChangeText={setCodigoPatrimonio} 
-              placeholder="Ex: PAT-998822" 
-              placeholderTextColor="#94a3b8"
-            />
-            <TouchableOpacity style={[styles.scanButton, { backgroundColor: '#10b981', marginRight: 8 }]} onPress={gerarPatrimonio}>
-              <Text style={styles.scanBtnText}>🔄 Gerar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.scanButton} onPress={abrirScanner}>
-              <Text style={styles.scanBtnText}>📷 Escanear</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Categoria Dropdown */}
-          <Text style={styles.label}>Categoria</Text>
-          <TouchableOpacity style={styles.dropdown} onPress={() => showPicker('CATEGORIA')}>
-            <Text style={[styles.dropdownText, !categoriaId && styles.placeholderText]}>
-              {getNomeCategoria()}
-            </Text>
-            <Text style={styles.arrowIcon}>▼</Text>
-          </TouchableOpacity>
-
-          {/* Tipo Dropdown */}
-          <Text style={styles.label}>Tipo de Equipamento</Text>
-          <TouchableOpacity style={[styles.dropdown, !categoriaId && styles.dropdownDisabled]} onPress={() => showPicker('TIPO')}>
-            <Text style={[styles.dropdownText, !tipoId && styles.placeholderText]}>
-              {getNomeTipo()}
-            </Text>
-            <Text style={styles.arrowIcon}>▼</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Regras & Condições</Text>
-
-          <View style={styles.switchRow}>
-            <View style={styles.switchTextContainer}>
-              <Text style={styles.switchLabel}>Disponível para Empréstimo</Text>
-              <Text style={styles.switchSubLabel}>Permite reservar e retirar este item.</Text>
+          {/* QUANTIDADE E CÓDIGO */}
+          <View style={styles.row}>
+            <View style={{ width: 110, marginRight: 10 }}>
+              <Text style={styles.sectionLabel}>Quantidade</Text>
+              <TextInput
+                style={styles.input}
+                value={quantidade}
+                onChangeText={setQuantidade}
+                keyboardType="numeric"
+              />
             </View>
-            <Switch 
-              value={permitirEmprestimo} 
-              onValueChange={setPermitirEmprestimo}
-              trackColor={{ false: '#cbd5e1', true: '#a7f3d0' }}
-              thumbColor={permitirEmprestimo ? '#10b981' : '#64748b'}
-            />
-          </View>
-
-          <View style={styles.separator} />
-
-          <View style={styles.switchRow}>
-            <View style={styles.switchTextContainer}>
-              <Text style={styles.switchLabel}>Cadastrar com Defeito / Avaria</Text>
-              <Text style={styles.switchSubLabel}>Ative se o item já foi recebido com problemas.</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionLabel}>
+                {qtyNum > 1 ? "Geração em Lote" : "Código de Patrimônio"}
+              </Text>
+              {qtyNum > 1 ? (
+                <View style={styles.batchInfoBox}>
+                  <Text style={styles.batchInfoText}>
+                    Gerará {qtyNum} código(s) automático(s)
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.patrimonioRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0, marginRight: 6 }]}
+                    value={codigoPatrimonio}
+                    onChangeText={setCodigoPatrimonio}
+                    placeholder="Ex: CAM-10492"
+                    placeholderTextColor="#94a3b8"
+                  />
+                  <TouchableOpacity style={styles.iconBtn} onPress={gerarPatrimonioUnico}>
+                    <RefreshCw size={18} color="#4f46e5" />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.iconBtn, { backgroundColor: "#f1f5f9" }]}
+                    onPress={async () => {
+                      if (!hasCameraPermission?.granted) await requestCameraPermission();
+                      setScannerVisible(true);
+                    }}
+                  >
+                    <Barcode size={18} color="#0f172a" />
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
-            <Switch 
-              value={recebeuComDefeito} 
-              onValueChange={setRecebeuComDefeito}
-              trackColor={{ false: '#cbd5e1', true: '#fecaca' }}
-              thumbColor={recebeuComDefeito ? '#ef4444' : '#64748b'}
-            />
           </View>
 
-          {/* Condicional de Avaria */}
-          {recebeuComDefeito && (
-            <View style={styles.avariaContainer}>
-              <Text style={styles.label}>Tipo de Avaria *</Text>
-              <TouchableOpacity style={styles.dropdown} onPress={() => showPicker('AVARIA')}>
-                <Text style={[styles.dropdownText, !avariaId && styles.placeholderText]}>
-                  {getNomeAvaria()}
+          {/* CATEGORIA E TIPO */}
+          <View style={styles.row}>
+            <View style={{ flex: 1, marginRight: 6 }}>
+              <View style={styles.labelWithAdd}>
+                <Text style={styles.sectionLabel}>Categoria</Text>
+                <TouchableOpacity onPress={() => setShowModalCriarCat(true)}>
+                  <Text style={styles.addInlineText}>+ Nova</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={[styles.selectorBtn, catSelecionada && styles.selectorBtnActive]}
+                onPress={() => setShowModalCat(true)}
+              >
+                <Text style={[styles.selectorText, catSelecionada && styles.selectorTextActive]} numberOfLines={1}>
+                  {catSelecionada ? catSelecionada.nome : "Selecione..."}
                 </Text>
-                <Text style={styles.arrowIcon}>▼</Text>
+                <ChevronDown size={16} color={catSelecionada ? "#4f46e5" : "#94a3b8"} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flex: 1, marginLeft: 6 }}>
+              <View style={styles.labelWithAdd}>
+                <Text style={styles.sectionLabel}>Tipo</Text>
+                {categoriaId ? (
+                  <TouchableOpacity onPress={() => setShowModalCriarTipo(true)}>
+                    <Text style={styles.addInlineText}>+ Novo</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <TouchableOpacity
+                style={[styles.selectorBtn, tipoSelecionado && styles.selectorBtnActive]}
+                onPress={() => {
+                  if (!categoriaId) return Alert.alert("Aviso", "Selecione uma Categoria primeiro.");
+                  setShowModalTipo(true);
+                }}
+              >
+                <Text style={[styles.selectorText, tipoSelecionado && styles.selectorTextActive]} numberOfLines={1}>
+                  {tipoSelecionado ? tipoSelecionado.nome : "Selecione..."}
+                </Text>
+                <ChevronDown size={16} color={tipoSelecionado ? "#4f46e5" : "#94a3b8"} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* CHECKBOX: DEFEITO INICIAL */}
+          <TouchableOpacity
+            style={[styles.cardCheckbox, recebeuComDefeito && styles.cardCheckboxDefeito]}
+            onPress={() => setRecebeuComDefeito(!recebeuComDefeito)}
+            activeOpacity={0.8}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              {recebeuComDefeito ? (
+                <CheckSquare size={20} color="#dc2626" />
+              ) : (
+                <Square size={20} color="#94a3b8" />
+              )}
+              <Text style={[styles.cardCheckboxText, recebeuComDefeito && { color: "#dc2626", fontWeight: "700" }]}>
+                Registrar com defeito inicial
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          {recebeuComDefeito && (
+            <View style={styles.defeitoBox}>
+              <Text style={styles.sectionLabel}>Tipo de Avaria</Text>
+              <TouchableOpacity
+                style={[styles.selectorBtn, avariaSelecionada && styles.selectorBtnActive]}
+                onPress={() => setShowModalAvaria(true)}
+              >
+                <Text style={[styles.selectorText, avariaSelecionada && styles.selectorTextActive]}>
+                  {avariaSelecionada ? avariaSelecionada.nome : "Selecione o defeito..."}
+                </Text>
+                <ChevronDown size={16} color={avariaSelecionada ? "#dc2626" : "#94a3b8"} />
               </TouchableOpacity>
 
-              <Text style={styles.label}>Descrição da Avaria</Text>
-              <TextInput 
-                style={[styles.input, styles.textArea]} 
-                value={avariaDescricao} 
-                onChangeText={setAvariaDescricao} 
-                placeholder="Descreva o problema detalhadamente..." 
+              <Text style={styles.sectionLabel}>Descrição do Problema</Text>
+              <TextInput
+                style={[styles.input, { height: 70, textAlignVertical: "top" }]}
+                value={avariaDescricao}
+                onChangeText={setAvariaDescricao}
+                placeholder="Descreva o defeito apresentado..."
                 placeholderTextColor="#94a3b8"
                 multiline
-                numberOfLines={3}
               />
             </View>
           )}
-        </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Mídia do Equipamento</Text>
-          <Text style={styles.switchSubLabel}>Adicione uma foto tirando na hora ou da galeria.</Text>
-
-          <View style={styles.mediaButtons}>
-            <TouchableOpacity style={styles.mediaBtn} onPress={tirarFoto}>
-              <Text style={styles.mediaBtnText}>📸 Tirar Foto</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.mediaBtn, styles.mediaBtnOutline]} onPress={escolherGaleria}>
-              <Text style={styles.mediaBtnTextOutline}>🖼️ Galeria</Text>
-            </TouchableOpacity>
-          </View>
-
-          {fotoUri && (
-            <View style={styles.imagePreviewContainer}>
-              <Image source={{ uri: fotoUri }} style={styles.imagePreview} />
-              <TouchableOpacity style={styles.deleteImageBtn} onPress={() => setFotoUri(null)}>
-                <Text style={styles.deleteImageText}>Remover Foto</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
-        <TouchableOpacity style={styles.submitButton} onPress={salvarOffline}>
-          <Text style={styles.submitButtonText}>Salvar Offline</Text>
-        </TouchableOpacity>
-      </ScrollView>
-
-      {/* Select Picker Modal */}
-      <Modal visible={pickerModalVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.pickerCard}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>
-                {pickerType === 'CATEGORIA' && 'Selecionar Categoria'}
-                {pickerType === 'TIPO' && 'Selecionar Tipo'}
-                {pickerType === 'AVARIA' && 'Selecionar Avaria'}
-              </Text>
-              <TouchableOpacity onPress={() => setPickerModalVisible(false)}>
-                <Text style={styles.closePickerBtn}>Fechar</Text>
-              </TouchableOpacity>
-            </View>
-            <FlatList 
-              data={getPickerData()}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.pickerItem} onPress={() => selectPickerItem(item)}>
-                  <Text style={styles.pickerItemText}>{item.nome}</Text>
-                  {item.descricao && <Text style={styles.pickerItemDesc}>{item.descricao}</Text>}
-                </TouchableOpacity>
+          {/* CHECKBOX: VISÍVEL PARA EMPRÉSTIMO */}
+          <TouchableOpacity
+            style={[styles.cardCheckbox, permitirEmprestimo && styles.cardCheckboxEmprestimo]}
+            onPress={() => setPermitirEmprestimo(!permitirEmprestimo)}
+            activeOpacity={0.8}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              {permitirEmprestimo ? (
+                <CheckSquare size={20} color="#2563eb" />
+              ) : (
+                <Square size={20} color="#94a3b8" />
               )}
-              ItemSeparatorComponent={() => <View style={styles.pickerSeparator} />}
-              ListEmptyComponent={() => (
-                <Text style={styles.emptyPickerText}>Nenhum item disponível.</Text>
+              <Text style={[styles.cardCheckboxText, permitirEmprestimo && { color: "#1d4ed8", fontWeight: "700" }]}>
+                Visível para Solicitação (Empréstimo Público)
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* BOTÃO CADASTRAR */}
+          <TouchableOpacity
+            style={[styles.btnCadastrar, saving && { opacity: 0.7 }]}
+            onPress={handleSalvarEquipamento}
+            disabled={saving}
+          >
+            {saving ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Plus size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.btnCadastrarText}>Cadastrar Equipamento</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+
+      {/* STUDIO DE CORTE E ROTAÇÃO UNIFICADO */}
+      <ImageCropModal
+        visible={showCropModal}
+        imageUri={cropImageRaw}
+        onClose={() => setShowCropModal(false)}
+        onConfirm={(processedUri) => setFotoUri(processedUri)}
+      />
+
+      {/* MODAL ESCOLHER CATEGORIA */}
+      <Modal visible={showModalCat} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Selecionar Categoria</Text>
+              <TouchableOpacity onPress={() => setShowModalCat(false)}>
+                <X size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={categorias}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ padding: 16 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.modalItem} onPress={() => handleSelectCategoria(item)}>
+                  <Text style={styles.modalItemName}>{item.nome}</Text>
+                </TouchableOpacity>
               )}
             />
           </View>
         </View>
       </Modal>
 
-      {/* Barcode Scanner Modal */}
-      <Modal visible={scannerModalVisible} animationType="fade">
-        <View style={styles.scannerModalContainer}>
-          {isCameraReady && (
-            <View style={StyleSheet.absoluteFillObject}>
-              <CameraView
-                style={{ flex: 1 }}
-                facing="back"
-                onBarcodeScanned={handleBarcodeScanned}
-                barcodeScannerSettings={{
-                  barcodeTypes: ["qr", "ean13", "ean8", "code128", "code39"],
-                }}
-              />
+      {/* MODAL ESCOLHER TIPO */}
+      <Modal visible={showModalTipo} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Selecionar Subtipo</Text>
+              <TouchableOpacity onPress={() => setShowModalTipo(false)}>
+                <X size={22} color="#64748b" />
+              </TouchableOpacity>
             </View>
-          )}
-          <View style={styles.scannerModalOverlay}>
-            <View style={styles.scannerModalHeader}>
-              <Text style={styles.scannerModalTitle}>Escaneie o Código de Barras</Text>
-            </View>
-            <View style={styles.scannerTargetBox} />
-            <TouchableOpacity style={styles.closeScannerButton} onPress={fecharScanner}>
-              <Text style={styles.closeScannerText}>Cancelar</Text>
-            </TouchableOpacity>
+            <FlatList
+              data={tipos}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ padding: 16 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalItem}
+                  onPress={() => {
+                    setTipoId(item.id);
+                    setShowModalTipo(false);
+                  }}
+                >
+                  <Text style={styles.modalItemName}>{item.nome}</Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={() => (
+                <Text style={styles.emptyText}>Nenhum subtipo cadastrado nesta categoria.</Text>
+              )}
+            />
           </View>
         </View>
       </Modal>
-    </View>
+
+      {/* MODAL ESCOLHER AVARIA */}
+      <Modal visible={showModalAvaria} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Tipo de Avaria</Text>
+              <TouchableOpacity onPress={() => setShowModalAvaria(false)}>
+                <X size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={tiposAvaria}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ padding: 16 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalItem}
+                  onPress={() => {
+                    setAvariaId(item.id);
+                    setShowModalAvaria(false);
+                  }}
+                >
+                  <Text style={styles.modalItemName}>{item.nome}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL CRIAR CATEGORIA RÁPIDA */}
+      <Modal visible={showModalCriarCat} animationType="slide" transparent>
+        <View style={[styles.modalOverlay, { paddingBottom: keyboardHeight > 0 ? keyboardHeight : 0 }]}>
+          <View style={styles.modalSheet}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20 }}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Criar Categoria</Text>
+                <TouchableOpacity onPress={() => setShowModalCriarCat(false)}>
+                  <X size={22} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.input}
+                value={novaCatNome}
+                onChangeText={setNovaCatNome}
+                placeholder="Ex: FOTOGRAFIA, ÁUDIO..."
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="characters"
+                autoFocus
+              />
+              <TouchableOpacity style={styles.btnCadastrar} onPress={handleCriarCategoriaRapida}>
+                <Text style={styles.btnCadastrarText}>Salvar Categoria</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL CRIAR TIPO RÁPIDO */}
+      <Modal visible={showModalCriarTipo} animationType="slide" transparent>
+        <View style={[styles.modalOverlay, { paddingBottom: keyboardHeight > 0 ? keyboardHeight : 0 }]}>
+          <View style={styles.modalSheet}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20 }}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Criar Subtipo</Text>
+                <TouchableOpacity onPress={() => setShowModalCriarTipo(false)}>
+                  <X size={22} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.input}
+                value={novoTipoNome}
+                onChangeText={setNovoTipoNome}
+                placeholder="Ex: Câmera Mirrorless, Microfone..."
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="words"
+                autoFocus
+              />
+              <TouchableOpacity style={styles.btnCadastrar} onPress={handleCriarTipoRapido}>
+                <Text style={styles.btnCadastrarText}>Salvar Subtipo</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL CAMERA SCANNER */}
+      <Modal visible={scannerVisible} animationType="slide">
+        <SafeAreaView style={{ flex: 1, backgroundColor: "#000" }}>
+          {scannerVisible && (
+            <CameraView
+              style={{ flex: 1 }}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ["code128", "qr", "ean13", "ean8"] }}
+              onBarcodeScanned={({ data }) => {
+                setCodigoPatrimonio(data);
+                setScannerVisible(false);
+              }}
+            />
+          )}
+          <TouchableOpacity
+            style={styles.closeScannerBtn}
+            onPress={() => setScannerVisible(false)}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Cancelar</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  mainContainer: { 
-    flex: 1, 
-    backgroundColor: '#f1f5f9' 
+  container: { flex: 1, backgroundColor: "#ffffff" },
+  scroll: { padding: 20, paddingBottom: 140 },
+  sectionLabel: { fontSize: 13, fontWeight: "600", color: "#334155", marginBottom: 6, marginTop: 12 },
+  labelWithAdd: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  addInlineText: { fontSize: 12, fontWeight: "700", color: "#2563eb", marginTop: 12 },
+  input: {
+    backgroundColor: "#ffffff", borderWidth: 1.5, borderColor: "#e2e8f0",
+    borderRadius: 12, padding: 14, fontSize: 15, color: "#0f172a", marginBottom: 4,
   },
-  scrollContainer: { 
-    padding: 16, 
-    paddingBottom: 40 
+  row: { flexDirection: "row", alignItems: "center" },
+  patrimonioRow: { flexDirection: "row", alignItems: "center" },
+  iconBtn: {
+    backgroundColor: "#eef2ff", borderRadius: 12, padding: 14,
+    alignItems: "center", justifyContent: "center", marginLeft: 6,
   },
-  card: { 
-    backgroundColor: '#ffffff', 
-    borderRadius: 16, 
-    padding: 16, 
-    marginBottom: 16,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 2
+  batchInfoBox: {
+    backgroundColor: "#eff6ff", borderRadius: 12, padding: 14,
+    alignItems: "center", justifyContent: "center",
   },
-  sectionTitle: { 
-    fontSize: 18, 
-    fontWeight: '700', 
-    color: '#0f172a', 
-    marginBottom: 16 
+  batchInfoText: { color: "#2563eb", fontWeight: "600", fontSize: 13 },
+  selectorBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: "#ffffff", borderWidth: 1.5, borderColor: "#e2e8f0",
+    borderRadius: 12, padding: 14,
   },
-  label: { 
-    fontSize: 14, 
-    fontWeight: '600', 
-    color: '#334155', 
-    marginBottom: 6,
-    marginTop: 10
+  selectorBtnActive: { borderColor: "#2563eb", backgroundColor: "#f8fafc" },
+  selectorText: { fontSize: 14, color: "#94a3b8" },
+  selectorTextActive: { color: "#0f172a", fontWeight: "600" },
+  photoPickerBox: {
+    backgroundColor: "#f8fafc", borderWidth: 1.5, borderColor: "#e2e8f0",
+    borderStyle: "dashed", borderRadius: 14, padding: 16, alignItems: "center",
   },
-  input: { 
-    backgroundColor: '#f8fafc', 
-    borderWidth: 1, 
-    borderColor: '#cbd5e1', 
-    borderRadius: 10,
-    paddingHorizontal: 14, 
-    paddingVertical: 10, 
-    fontSize: 15,
-    color: '#0f172a',
+  photoHelperText: { fontSize: 11, color: "#94a3b8", marginTop: 8 },
+  photoActionBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+    backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#e2e8f0",
+    borderRadius: 10, paddingVertical: 12, gap: 6,
   },
-  patrimonyRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center' 
+  photoActionBtnText: { color: "#4f46e5", fontSize: 13, fontWeight: "600" },
+  squarePhotoWrapper: { marginTop: 4, marginBottom: 10 },
+  squarePhotoContainer: {
+    width: "100%", aspectRatio: 1, borderRadius: 16,
+    overflow: "hidden", backgroundColor: "#0f172a", position: "relative",
   },
-  patrimonyInput: { 
-    flex: 1, 
-    marginRight: 10 
+  squarePhoto: { width: "100%", height: "100%" },
+  photoControlsRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  photoControlBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+    backgroundColor: "#ffffff", borderWidth: 1, borderColor: "#e2e8f0",
+    borderRadius: 10, paddingVertical: 10, gap: 5,
   },
-  scanButton: { 
-    backgroundColor: '#4f46e5', 
-    borderRadius: 10, 
-    paddingHorizontal: 16, 
-    paddingVertical: 12,
-    justifyContent: 'center',
-    alignItems: 'center'
+  photoControlBtnText: { fontSize: 12, fontWeight: "600", color: "#334155" },
+  cardCheckbox: {
+    backgroundColor: "#f8fafc", borderWidth: 1.5, borderColor: "#e2e8f0",
+    borderRadius: 14, padding: 16, marginTop: 14,
   },
-  scanBtnText: { 
-    color: '#ffffff', 
-    fontSize: 14, 
-    fontWeight: '600' 
+  cardCheckboxDefeito: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
+  cardCheckboxEmprestimo: { backgroundColor: "#eff6ff", borderColor: "#bfdbfe" },
+  cardCheckboxText: { fontSize: 14, color: "#334155", marginLeft: 10, fontWeight: "500" },
+  defeitoBox: {
+    backgroundColor: "#fff5f5", borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: "#fed7d7", marginTop: 8,
   },
-  dropdown: { 
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc', 
-    borderWidth: 1, 
-    borderColor: '#cbd5e1', 
-    borderRadius: 10,
-    paddingHorizontal: 14, 
-    paddingVertical: 12,
-    marginTop: 4,
-    marginBottom: 10
+  btnCadastrar: {
+    backgroundColor: "#2563eb", borderRadius: 14, paddingVertical: 16,
+    alignItems: "center", justifyContent: "center", marginTop: 24,
+    shadowColor: "#2563eb", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
   },
-  dropdownDisabled: {
-    backgroundColor: '#e2e8f0',
-    borderColor: '#cbd5e1',
-    opacity: 0.6
+  btnCadastrarText: { color: "#ffffff", fontSize: 16, fontWeight: "700" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
+  modalSheet: { backgroundColor: "#ffffff", borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "85%", paddingBottom: 24 },
+  modalHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    padding: 20, borderBottomWidth: 1, borderBottomColor: "#f1f5f9",
   },
-  dropdownText: { 
-    fontSize: 15, 
-    color: '#0f172a' 
+  modalTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
+  modalItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#f1f5f9" },
+  modalItemName: { fontSize: 15, fontWeight: "600", color: "#0f172a" },
+  emptyText: { textAlign: "center", color: "#94a3b8", padding: 20 },
+  closeScannerBtn: {
+    position: "absolute", bottom: 40, alignSelf: "center",
+    backgroundColor: "#ef4444", paddingHorizontal: 24, paddingVertical: 12,
+    borderRadius: 20,
   },
-  placeholderText: { 
-    color: '#94a3b8' 
-  },
-  arrowIcon: { 
-    fontSize: 10, 
-    color: '#64748b' 
-  },
-  switchRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center',
-    paddingVertical: 8
-  },
-  switchTextContainer: { 
-    flex: 0.85 
-  },
-  switchLabel: { 
-    fontSize: 15, 
-    fontWeight: '600', 
-    color: '#334155' 
-  },
-  switchSubLabel: { 
-    fontSize: 12, 
-    color: '#64748b', 
-    marginTop: 2 
-  },
-  separator: { 
-    height: 1, 
-    backgroundColor: '#e2e8f0', 
-    marginVertical: 10 
-  },
-  avariaContainer: { 
-    backgroundColor: '#fef2f2', 
-    padding: 12, 
-    borderRadius: 12, 
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#fca5a5'
-  },
-  textArea: { 
-    minHeight: 80, 
-    textAlignVertical: 'top' 
-  },
-  mediaButtons: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    marginTop: 12 
-  },
-  mediaBtn: { 
-    flex: 0.48, 
-    backgroundColor: '#4f46e5', 
-    padding: 12, 
-    borderRadius: 10, 
-    alignItems: 'center' 
-  },
-  mediaBtnOutline: { 
-    backgroundColor: 'transparent', 
-    borderWidth: 1, 
-    borderColor: '#4f46e5' 
-  },
-  mediaBtnText: { 
-    color: '#ffffff', 
-    fontSize: 14, 
-    fontWeight: '600' 
-  },
-  mediaBtnTextOutline: { 
-    color: '#4f46e5', 
-    fontSize: 14, 
-    fontWeight: '600' 
-  },
-  imagePreviewContainer: { 
-    alignItems: 'center', 
-    marginTop: 16 
-  },
-  imagePreview: { 
-    width: 200, 
-    height: 200, 
-    borderRadius: 12 
-  },
-  deleteImageBtn: { 
-    marginTop: 8, 
-    paddingVertical: 6, 
-    paddingHorizontal: 12, 
-    backgroundColor: '#ef4444', 
-    borderRadius: 8 
-  },
-  deleteImageText: { 
-    color: '#ffffff', 
-    fontSize: 12, 
-    fontWeight: '600' 
-  },
-  submitButton: { 
-    backgroundColor: '#10b981', 
-    paddingVertical: 16, 
-    borderRadius: 12, 
-    alignItems: 'center',
-    marginVertical: 20,
-    shadowColor: '#10b981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 3
-  },
-  submitButtonText: { 
-    color: '#ffffff', 
-    fontSize: 16, 
-    fontWeight: '700' 
-  },
-  // Modal Picker
-  modalBg: { 
-    flex: 1, 
-    backgroundColor: 'rgba(15, 23, 42, 0.6)', 
-    justifyContent: 'flex-end' 
-  },
-  pickerCard: { 
-    backgroundColor: '#ffffff', 
-    borderTopLeftRadius: 20, 
-    borderTopRightRadius: 20, 
-    maxHeight: '60%', 
-    padding: 16 
-  },
-  pickerHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginBottom: 16 
-  },
-  pickerTitle: { 
-    fontSize: 17, 
-    fontWeight: '700', 
-    color: '#0f172a' 
-  },
-  closePickerBtn: { 
-    color: '#4f46e5', 
-    fontWeight: '600', 
-    fontSize: 15 
-  },
-  pickerItem: { 
-    paddingVertical: 14, 
-    paddingHorizontal: 8 
-  },
-  pickerItemText: { 
-    fontSize: 15, 
-    color: '#1e293b', 
-    fontWeight: '600' 
-  },
-  pickerItemDesc: { 
-    fontSize: 12, 
-    color: '#64748b', 
-    marginTop: 2 
-  },
-  pickerSeparator: { 
-    height: 1, 
-    backgroundColor: '#f1f5f9' 
-  },
-  emptyPickerText: { 
-    textAlign: 'center', 
-    color: '#94a3b8', 
-    padding: 24 
-  },
-  // Scanner Modal
-  scannerModalContainer: { 
-    flex: 1, 
-    backgroundColor: 'transparent' 
-  },
-  scannerModalOverlay: { 
-    ...StyleSheet.absoluteFillObject, 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingVertical: 40 
-  },
-  scannerModalHeader: { 
-    backgroundColor: 'rgba(15, 23, 42, 0.8)', 
-    paddingHorizontal: 16, 
-    paddingVertical: 8, 
-    borderRadius: 20 
-  },
-  scannerModalTitle: { 
-    color: '#ffffff', 
-    fontSize: 15, 
-    fontWeight: '600' 
-  },
-  scannerTargetBox: { 
-    width: 250, 
-    height: 150, 
-    borderColor: '#4f46e5', 
-    borderWidth: 2, 
-    borderRadius: 12, 
-    backgroundColor: 'transparent' 
-  },
-  closeScannerButton: { 
-    backgroundColor: '#ef4444', 
-    paddingHorizontal: 24, 
-    paddingVertical: 12, 
-    borderRadius: 12 
-  },
-  closeScannerText: { 
-    color: '#ffffff', 
-    fontSize: 15, 
-    fontWeight: '600' 
-  }
 });

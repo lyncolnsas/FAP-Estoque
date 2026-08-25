@@ -96,11 +96,34 @@ export default function QRScannerScreen({ navigation }) {
       if (connectedIp) {
         setApiUrl(connectedIp, result.port);
         if (needsAuth) {
-           alert('Servidor encontrado! Você precisará digitar a palavra-passe ao tentar sincronizar.');
+          // Verifica se a senha salva ainda é válida ANTES de incomodar o utilizador
+          try {
+            const stillValid = await handshake(connectedIp, result.port);
+            if (stillValid) {
+              // Senha salva continua funcionando, não precisa pedir novamente
+              alert('Servidor configurado e conectado com sucesso!');
+              navigation.goBack();
+              return;
+            } else {
+              // handshake retornou false = senha está errada ou ausente → pede nova
+              navigation.navigate('Home', { requireAuth: true });
+              return;
+            }
+          } catch (revalidateErr) {
+            if (revalidateErr.message !== 'UNAUTHORIZED') {
+              // Erro genérico de rede, não de senha
+              alert('Servidor configurado e conectado com sucesso!');
+              navigation.goBack();
+              return;
+            }
+            // Realmente UNAUTHORIZED com a senha salva → pede a nova senha
+          }
+          navigation.navigate('Home', { requireAuth: true });
         } else {
-           alert('Servidor configurado e conectado com sucesso!');
+          alert('Servidor configurado e conectado com sucesso!');
+          navigation.goBack();
         }
-        navigation.goBack();
+
       } else {
         alert(`Falha de conexão.\nTestamos: ${result.ips.join(', ')}.\n\nVerifique se o celular está no mesmo Wi-Fi que o PC e se não está no 4G. Verifique também o Firewall do Windows!`);
         setTimeout(() => setScanned(false), 4000);
@@ -129,8 +152,7 @@ export default function QRScannerScreen({ navigation }) {
     } catch (error) {
       if (error.message === 'UNAUTHORIZED') {
         setApiUrl(manualIp.trim(), 3333);
-        alert('Servidor encontrado! Você precisará digitar a palavra-passe ao tentar sincronizar.');
-        navigation.goBack();
+        navigation.navigate('Home', { requireAuth: true });
       } else {
         alert('Erro ao tentar conectar.');
       }
@@ -143,7 +165,7 @@ export default function QRScannerScreen({ navigation }) {
     return (
       <KeyboardAvoidingView 
         style={styles.container} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={styles.manualScroll}>
           <View style={styles.permissionCard}>

@@ -16,13 +16,13 @@ import {
   Modal
 } from 'react-native';
 import { db } from '../db/database';
-import { syncPull, syncPush, API_URL, setApiUrl, getApiMemory, handshake } from '../services/api';
+import { syncPull, syncPush, API_URL, setApiUrl, getApiUrl, getApiMemory, handshake } from '../services/api';
 import { scanNetworkForServer } from '../services/discovery';
 import { imprimirComprovante, imprimirEtiqueta } from '../services/printer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Settings, Upload, Download, PlusCircle, AlertTriangle, RefreshCw, Package, Printer, Server, Search } from 'lucide-react-native';
+import { Settings, Upload, Download, PlusCircle, AlertTriangle, RefreshCw, Package, Printer, Server, Search, HandshakeIcon, Tag, Building2, Calendar, Wrench, FolderPlus, Layers } from 'lucide-react-native';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const [activeTab, setActiveTab] = useState('DASHBOARD'); // 'DASHBOARD' | 'ACERVO' | 'AVARIAS' | 'REQUISICOES' | 'ACOES'
   const [offlineLogs, setOfflineLogs] = useState([]);
   const [equipamentos, setEquipamentos] = useState([]);
@@ -39,11 +39,19 @@ export default function HomeScreen({ navigation }) {
   // Senha de Autenticação Sync
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
   const [syncPassword, setSyncPassword] = useState('');
+  const [pendingAction, setPendingAction] = useState(null); // Para retentar após salvar senha
 
   const handleSavePassword = async () => {
     await AsyncStorage.setItem('SYNC_PASSWORD', syncPassword);
     setShowPasswordPrompt(false);
-    Alert.alert('Salvo', 'Palavra-passe salva! Tente sincronizar novamente.');
+    setSyncPassword('');
+    // Retém a ação pendente e tenta automaticamente após salvar
+    const action = pendingAction;
+    setPendingAction(null);
+    if (action === 'push') handleSyncPushOnly();
+    else if (action === 'pull') handleSyncPullOnly();
+    else if (action === 'inteligente') handleSyncInteligente();
+    else Alert.alert('Salvo', 'Palavra-passe salva! Tente sincronizar novamente.');
   };
 
   useEffect(() => {
@@ -55,8 +63,15 @@ export default function HomeScreen({ navigation }) {
     return unsubscribe;
   }, [navigation]);
 
+  useEffect(() => {
+    if (route?.params?.requireAuth) {
+      setShowPasswordPrompt(true);
+      navigation.setParams({ requireAuth: undefined });
+    }
+  }, [route?.params?.requireAuth]);
+
   const checkAutoConnect = async () => {
-    if (API_URL) return;
+    if (getApiUrl()) return; // Já conectado
     try {
       const lastDismissedStr = await AsyncStorage.getItem('LAST_SCAN_DISMISSED');
       if (lastDismissedStr) {
@@ -152,15 +167,15 @@ export default function HomeScreen({ navigation }) {
   };
 
   const handleSyncPushOnly = async () => {
-    if (!API_URL) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
+    if (!getApiUrl()) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
     setSyncing(true);
     try {
       const res = await syncPush();
       Alert.alert(res.temFalhas ? 'Atenção' : 'Sucesso', res.message || 'Tudo sincronizado');
       carregarDados();
     } catch (error) {
-      console.error(error);
       if (error.message === 'UNAUTHORIZED') {
+        setPendingAction('push');
         setShowPasswordPrompt(true);
       } else {
         Alert.alert('Falha', error.message || 'Erro ao enviar dados.');
@@ -170,16 +185,17 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+
   const handleSyncPullOnly = async () => {
-    if (!API_URL) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
+    if (!getApiUrl()) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
     setSyncing(true);
     try {
       await syncPull();
-      Alert.alert('Sucesso', 'Tudo sincronizado (Recebimento)');
+      Alert.alert('Sucesso', 'Sincronização concluída!');
       carregarDados();
     } catch (error) {
-      console.error(error);
       if (error.message === 'UNAUTHORIZED') {
+        setPendingAction('pull');
         setShowPasswordPrompt(true);
       } else {
         Alert.alert('Falha', error.message || 'Erro ao baixar dados.');
@@ -189,8 +205,9 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
+
   const handleSyncInteligente = async () => {
-    if (!API_URL) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
+    if (!getApiUrl()) return Alert.alert('Atenção', 'Você precisa configurar o IP primeiro.');
     setSyncing(true);
     try {
       const pushRes = await syncPush();
@@ -202,12 +219,11 @@ export default function HomeScreen({ navigation }) {
       } else {
         finalMessage = 'Base de dados atualizada (Pull concluído). Nenhuma nova ação para enviar.';
       }
-
       Alert.alert(pushRes.temFalhas ? 'Atenção' : 'Sincronização Concluída', finalMessage);
       carregarDados();
     } catch (error) {
-      console.error(error);
       if (error.message === 'UNAUTHORIZED') {
+        setPendingAction('inteligente');
         setShowPasswordPrompt(true);
       } else {
         Alert.alert('Falha', error.message || 'Erro na sincronização geral.');
@@ -216,6 +232,7 @@ export default function HomeScreen({ navigation }) {
       setSyncing(false);
     }
   };
+
 
   const handlePrint = async (requisicao, formato) => {
     try {
@@ -239,7 +256,39 @@ export default function HomeScreen({ navigation }) {
       const serverInfo = await scanNetworkForServer();
       setApiUrl(serverInfo.ip, serverInfo.port);
       if (serverInfo.needsAuth) {
-        setShowPasswordPrompt(true);
+        // Servidor exige autenticação. Testa a senha salva.
+        try {
+          const success = await handshake(serverInfo.ip, serverInfo.port);
+          if (success) {
+            // Senha salva está correta — conectado silenciosamente!
+            Alert.alert('Sucesso', `Servidor encontrado: ${serverInfo.ip}\nConectado com a palavra-passe salva.`);
+            return;
+          } else {
+            // handshake retornou false = servidor respondeu mas senha está errada ou ausente
+            // NÃO mostra "Conectado" — pede a senha correta
+            Alert.alert(
+              'Senha Necessária',
+              `Servidor encontrado em ${serverInfo.ip}, mas a palavra-passe está incorreta ou não foi configurada.`
+            );
+            setPendingAction(null);
+            setShowPasswordPrompt(true);
+            return;
+          }
+        } catch (revalidateErr) {
+          if (revalidateErr.message === 'UNAUTHORIZED') {
+            // 401 confirmado com a senha salva → senha errada
+            Alert.alert(
+              'Senha Incorreta',
+              `A palavra-passe salva não é aceita pelo servidor ${serverInfo.ip}. Digite a correta.`
+            );
+            setPendingAction(null);
+            setShowPasswordPrompt(true);
+            return;
+          }
+          // Erro de rede (timeout, etc.) — assume conectado e tenta
+          Alert.alert('Sucesso', `Servidor encontrado: ${serverInfo.ip}`);
+          return;
+        }
       } else {
         Alert.alert('Sucesso', `Servidor encontrado: ${serverInfo.ip}`);
       }
@@ -249,6 +298,7 @@ export default function HomeScreen({ navigation }) {
       setScanning(false);
     }
   };
+
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -290,8 +340,11 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.statusText}>{API_URL ? 'Conectado' : 'Modo Offline'}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => navigation.navigate('QRScanner')}>
-          <Settings size={18} color="#fff" style={{ marginRight: 6 }} />
+        <TouchableOpacity 
+          style={styles.settingsBtn} 
+          onPress={() => navigation.navigate('QRScanner')}
+        >
+          <Settings size={15} color="#2563eb" />
           <Text style={styles.settingsBtnText}>Servidor</Text>
         </TouchableOpacity>
       </View>
@@ -353,7 +406,7 @@ export default function HomeScreen({ navigation }) {
               </View>
               <View style={[styles.statCard, { borderLeftColor: '#10b981', borderLeftWidth: 4 }]}>
                 <Text style={styles.statNumber}>{requisicoes.length}</Text>
-                <Text style={styles.statLabel}>Reisições Ativas</Text>
+                <Text style={styles.statLabel}>Requisições Ativas</Text>
               </View>
             </View>
 
@@ -387,7 +440,87 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.actionIconContainer}>
                   <PlusCircle size={24} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Novo Aparelho</Text>
+                <Text style={styles.actionText}>Novo Material</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.actionCard, { backgroundColor: '#0ea5e9' }]} 
+                onPress={() => navigation.navigate('Emprestimo')}
+              >
+                <View style={styles.actionIconContainer}>
+                  <HandshakeIcon size={24} color="#fff" />
+                </View>
+                <Text style={styles.actionText}>Empréstimo</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Central de Cadastros Offline */}
+            <Text style={styles.sectionTitle}>Central de Cadastros (Offline)</Text>
+            <View style={styles.cadastrosGrid}>
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('CadastrarEquipamento')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#eff6ff' }]}>
+                  <Package size={22} color="#2563eb" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Materiais & Lotes</Text>
+                <Text style={styles.cadastroCardSub}>Novo equipamento</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('CadastrarCategoria')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#eef2ff' }]}>
+                  <FolderPlus size={22} color="#4f46e5" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Categorias & Tipos</Text>
+                <Text style={styles.cadastroCardSub}>Classificações</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('CadastrarLocal')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#f0f9ff' }]}>
+                  <Building2 size={22} color="#0284c7" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Locais & Salas</Text>
+                <Text style={styles.cadastroCardSub}>Espaços e estúdios</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('ReservarLocal')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#ecfdf5' }]}>
+                  <Calendar size={22} color="#059669" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Reservar Espaço</Text>
+                <Text style={styles.cadastroCardSub}>Agenda de salas</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('CadastrarAvaria')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#fef2f2' }]}>
+                  <Wrench size={22} color="#dc2626" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Defeitos & Avarias</Text>
+                <Text style={styles.cadastroCardSub}>Manutenções</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.cadastroCard}
+                onPress={() => navigation.navigate('Emprestimo')}
+              >
+                <View style={[styles.cadastroIconBg, { backgroundColor: '#fdf4ff' }]}>
+                  <HandshakeIcon size={22} color="#a855f7" />
+                </View>
+                <Text style={styles.cadastroCardTitle}>Empréstimos</Text>
+                <Text style={styles.cadastroCardSub}>Retiradas rápidas</Text>
               </TouchableOpacity>
             </View>
 
@@ -658,14 +791,22 @@ export default function HomeScreen({ navigation }) {
                     <Text style={styles.logActionType}>
                       {item.tipo === 'SEPARACAO' && 'LIBERAÇÃO'}
                       {item.tipo === 'DEVOLUCAO' && 'DEVOLUÇÃO'}
-                      {item.tipo === 'NOVO_EQUIPAMENTO' && 'NOVO CADASTRO'}
+                      {item.tipo === 'NOVO_EQUIPAMENTO' && 'NOVO EQUIPAMENTO'}
+                      {item.tipo === 'EMPRESTIMO_OFFLINE' && 'NOVO EMPRÉSTIMO'}
+                      {item.tipo === 'NOVA_CATEGORIA' && 'NOVA CATEGORIA'}
+                      {item.tipo === 'NOVO_TIPO_EQUIPAMENTO' && 'NOVO SUBTIPO'}
+                      {item.tipo === 'NOVO_LOCAL' && 'NOVO LOCAL'}
+                      {item.tipo === 'NOVA_RESERVA_LOCAL' && 'RESERVA DE ESPAÇO'}
+                      {item.tipo === 'NOVO_TIPO_AVARIA' && 'TIPO DE AVARIA'}
+                      {item.tipo === 'NOVA_AVARIA_REGISTRO' && 'AVARIA REPORTADA'}
+                      {item.tipo === 'RESOLVER_AVARIA' && 'AVARIA RESOLVIDA'}
                     </Text>
                     <Text style={styles.logTime}>
                       {new Date(item.data).toLocaleTimeString('pt-BR')}
                     </Text>
                   </View>
                   <Text style={styles.logDetails} numberOfLines={1}>
-                    ID / Dados: {item.itemId || item.dados}
+                    {item.tipo}: {item.itemId || ''}
                   </Text>
                 </View>
               )}
@@ -712,7 +853,7 @@ export default function HomeScreen({ navigation }) {
 
       {/* MODAL SENHA */}
       <Modal visible={showPasswordPrompt} transparent={true} animationType="fade">
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Autenticação Necessária</Text>
             <Text style={styles.modalText}>
@@ -720,8 +861,9 @@ export default function HomeScreen({ navigation }) {
             </Text>
             
             <TextInput
-              style={[styles.searchInput, { width: '100%', marginVertical: 15, textAlign: 'center' }]}
+              style={[styles.searchInput, { width: '100%', marginVertical: 15, textAlign: 'center', color: '#0f172a' }]}
               placeholder="Digite a Palavra-passe"
+              placeholderTextColor="#94a3b8"
               secureTextEntry
               value={syncPassword}
               onChangeText={setSyncPassword}
@@ -789,15 +931,18 @@ const styles = StyleSheet.create({
     color: '#64748b' 
   },
   settingsBtn: { 
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#eff6ff', 
     paddingHorizontal: 12, 
-    paddingVertical: 6, 
-    borderRadius: 8 
+    paddingVertical: 8, 
+    borderRadius: 10,
+    gap: 6
   },
   settingsBtnText: { 
     color: '#2563eb', 
-    fontSize: 12, 
-    fontWeight: '600' 
+    fontSize: 13, 
+    fontWeight: '700' 
   },
   tabContainer: { 
     backgroundColor: '#ffffff', 
@@ -882,14 +1027,17 @@ const styles = StyleSheet.create({
   },
   actionGrid: { 
     flexDirection: 'row', 
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     marginBottom: 20
   },
   actionCard: { 
-    width: '31%', 
+    width: '48%',
     borderRadius: 16, 
-    paddingVertical: 20, 
+    paddingVertical: 18,
+    paddingHorizontal: 8,
     alignItems: 'center',
+    marginBottom: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -1235,5 +1383,44 @@ const styles = StyleSheet.create({
     color: '#64748b', 
     marginTop: 4,
     textAlign: 'center'
+  },
+  // Central de Cadastros Offline
+  cadastrosGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 20
+  },
+  cadastroCard: {
+    width: '48%',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  cadastroIconBg: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10
+  },
+  cadastroCardTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 2
+  },
+  cadastroCardSub: {
+    fontSize: 11,
+    color: '#64748b'
   }
 });

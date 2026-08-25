@@ -43,3 +43,10 @@ Para iniciar o servidor de desenvolvimento:
 npx ts-node src/index.ts
 ```
 O servidor irÃ¡ rodar na porta **3333** (`http://localhost:3333`) e deve estar acessÃ­vel na rede local para que o Mobile e o PWA possam se comunicar. No Windows, pode ser necessÃ¡rio liberar a porta 3333 no firewall.
+
+## Atualizações Recentes: Autenticação Offline-First e Sync de Imagens
+
+1. **Autenticação Segura de Sincronização**: O servidor (API) e o PWA passaram a exigir uma Palavra-Passe para liberação do acesso e sincronismo, usando o cabeçalho x-sync-password.
+2. **Descoberta Inteligente (Mobile)**: O App Mobile implementou uma camada de discovery aprimorada que tenta o ping portando a senha salva offline. Erros 401 Unauthorized bloqueiam o handshake adequadamente, abrindo o modal visual pedindo a senha.
+3. **Resiliência de Teclado**: O aplicativo móvel recebeu tratamento via KeyboardAvoidingView no modal da Home e do Leitor de QRCode para evitar que o teclado nativo encubra os inputs em dispositivos menores.
+4. **Cache Físico de Imagens (Offline Completo)**: O motor de sincronização (syncPull) do Mobile foi recriado para baixar via expo-file-system as miniaturas do servidor, reescrevendo o banco de dados interno com a URL local ile:///.... Isso tornou o acesso ao Acervo 100% independente de internet após a Sincronização.

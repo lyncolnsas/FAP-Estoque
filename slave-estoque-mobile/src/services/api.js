@@ -13,6 +13,9 @@ export const setApiUrl = (ip, port) => {
   AsyncStorage.setItem('LAST_API_PORT', String(port)).catch(console.error);
 };
 
+// Getter sempre retorna o valor atual (evita binding morto em CommonJS)
+export const getApiUrl = () => API_URL;
+
 export const getSyncHeaders = async (extraHeaders = {}) => {
   const headers = { ...extraHeaders };
   try {
@@ -77,6 +80,9 @@ export const handshake = async (ip, port) => {
     }
     return false;
   } catch (error) {
+    if (error.message === 'UNAUTHORIZED') {
+      throw error;
+    }
     console.error('Handshake falhou:', error);
     return false;
   }
@@ -94,16 +100,76 @@ export const syncPull = async () => {
 
   const data = await res.json();
 
-  db.execSync('DELETE FROM Equipamento WHERE synced = 1');
-  db.execSync('DELETE FROM Categoria');
-  db.execSync('DELETE FROM TipoEquipamento');
-  db.execSync('DELETE FROM Requisicao');
-  db.execSync('DELETE FROM ItemRequisicao WHERE synced = 1');
-  db.execSync('DELETE FROM TipoAvaria');
-  db.execSync('DELETE FROM HistoricoAvaria');
-  db.execSync('DELETE FROM Usuario');
+  // ----- CACHE OFFLINE DE IMAGENS (EQUIPAMENTOS E LOCAIS) -----
+  try {
+    const imgDir = FileSystem.documentDirectory + 'images/';
+    await FileSystem.makeDirectoryAsync(imgDir, { intermediates: true }).catch(() => {});
+    
+    // 1. Equipamentos
+    for (let i = 0; i < (data.equipamentos || []).length; i++) {
+      const eq = data.equipamentos[i];
+      if (eq.fotoUrl && eq.fotoUrl.startsWith('/uploads/')) {
+        const fileName = eq.fotoUrl.split('/').pop();
+        const fileUri = imgDir + fileName;
+        
+        try {
+          const fileInfo = await FileSystem.getInfoAsync(fileUri);
+          if (!fileInfo.exists) {
+            await FileSystem.downloadAsync(`${API_URL}${eq.fotoUrl}`, fileUri);
+          }
+          eq.fotoUrl = fileUri;
+        } catch (downloadErr) {
+          console.error("Erro ao cachear imagem de equipamento:", downloadErr);
+        }
+      }
+    }
 
-  for (const eq of data.equipamentos) {
+    // 2. Locais & Salas
+    for (let i = 0; i < (data.locais || []).length; i++) {
+      const loc = data.locais[i];
+      if (loc.fotoUrl && loc.fotoUrl.startsWith('/uploads/')) {
+        const fileName = loc.fotoUrl.split('/').pop();
+        const fileUri = imgDir + fileName;
+        
+        try {
+          const fileInfo = await FileSystem.getInfoAsync(fileUri);
+          if (!fileInfo.exists) {
+            await FileSystem.downloadAsync(`${API_URL}${loc.fotoUrl}`, fileUri);
+          }
+          loc.fotoUrl = fileUri;
+        } catch (downloadErr) {
+          console.error("Erro ao cachear imagem de local:", downloadErr);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Erro geral na preparação das imagens offline:", e);
+  }
+  // -------------------------------------
+
+  // Garante que o esquema e as colunas (ex: synced) estejam 100% atualizados
+  try { initDB(); } catch (e) {}
+
+  const safeExec = (sql) => {
+    try {
+      db.execSync(sql);
+    } catch (e) {
+      console.warn("Aviso na limpeza local de sync:", e);
+    }
+  };
+
+  safeExec('DELETE FROM Equipamento WHERE synced = 1');
+  safeExec('DELETE FROM Categoria');
+  safeExec('DELETE FROM TipoEquipamento');
+  safeExec('DELETE FROM Requisicao');
+  safeExec('DELETE FROM ItemRequisicao WHERE synced = 1');
+  safeExec('DELETE FROM TipoAvaria');
+  safeExec('DELETE FROM HistoricoAvaria WHERE synced = 1');
+  safeExec('DELETE FROM Usuario');
+  safeExec('DELETE FROM Local WHERE synced = 1');
+  safeExec('DELETE FROM ReservaLocal WHERE synced = 1');
+
+  for (const eq of data.equipamentos || []) {
     db.runSync(
       `INSERT OR REPLACE INTO Equipamento (id, codigoPatrimonio, nome, categoriaId, tipoId, statusCondicao, permitirEmprestimo, recebeuComDefeito, fotoUrl, synced)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
@@ -111,37 +177,47 @@ export const syncPull = async () => {
     );
   }
 
-  for (const cat of data.categorias) {
-    db.runSync('INSERT INTO Categoria (id, nome) VALUES (?, ?)', [cat.id, cat.nome]);
+  for (const cat of data.categorias || []) {
+    db.runSync('INSERT OR REPLACE INTO Categoria (id, nome, synced) VALUES (?, ?, 1)', [cat.id, cat.nome]);
   }
 
-  for (const t of data.tipos) {
-    db.runSync('INSERT INTO TipoEquipamento (id, categoriaId, nome) VALUES (?, ?, ?)', [t.id, t.categoriaId, t.nome]);
+  for (const t of data.tipos || []) {
+    db.runSync('INSERT OR REPLACE INTO TipoEquipamento (id, categoriaId, nome, synced) VALUES (?, ?, ?, 1)', [t.id, t.categoriaId, t.nome]);
   }
 
-  for (const req of data.requisicoes) {
+  for (const req of data.requisicoes || []) {
     db.runSync('INSERT INTO Requisicao (id, solicitanteNome, departamento, status) VALUES (?, ?, ?, ?)', 
       [req.id, req.solicitanteNome, req.departamento, req.status]);
   }
 
-  for (const item of data.itensRequisicao) {
+  for (const item of data.itensRequisicao || []) {
     db.runSync(`INSERT OR REPLACE INTO ItemRequisicao (id, requisicaoId, equipamentoId, statusSeparacao, statusDevolucao, synced) 
                 VALUES (?, ?, ?, ?, ?, 1)`, 
       [item.id, item.requisicaoId, item.equipamentoId, item.statusSeparacao ? 1 : 0, item.statusDevolucao ? 1 : 0]);
   }
 
   for (const ta of data.tiposAvaria || []) {
-    db.runSync('INSERT INTO TipoAvaria (id, nome, descricao) VALUES (?, ?, ?)', [ta.id, ta.nome, ta.descricao]);
+    db.runSync('INSERT OR REPLACE INTO TipoAvaria (id, nome, descricao) VALUES (?, ?, ?)', [ta.id, ta.nome, ta.descricao]);
   }
 
   for (const ha of data.historicoAvarias || []) {
-    db.runSync(`INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro, dataResolucao)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    db.runSync(`INSERT OR REPLACE INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro, dataResolucao, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [ha.id, ha.equipamentoId, ha.requisicaoId, ha.tipoAvariaId, ha.descricao, ha.resolvido ? 1 : 0, ha.dataRegistro, ha.dataResolucao]);
   }
 
   for (const u of data.usuarios || []) {
-    db.runSync('INSERT INTO Usuario (id, nome, departamento, whatsapp) VALUES (?, ?, ?, ?)', [u.id, u.nome, u.departamento, u.whatsapp]);
+    db.runSync('INSERT OR REPLACE INTO Usuario (id, nome, departamento, whatsapp) VALUES (?, ?, ?, ?)', [u.id, u.nome, u.departamento, u.whatsapp]);
+  }
+
+  for (const loc of data.locais || []) {
+    db.runSync('INSERT OR REPLACE INTO Local (id, nome, capacidade, fotoUrl, synced) VALUES (?, ?, ?, ?, 1)', [loc.id, loc.nome, loc.capacidade || 0, loc.fotoUrl || null]);
+  }
+
+  for (const res of data.reservasLocais || []) {
+    db.runSync(`INSERT OR REPLACE INTO ReservaLocal (id, localId, usuarioId, solicitanteNome, departamento, dataInicio, dataFim, status, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [res.id, res.localId, res.usuarioId || null, res.usuario?.nome || null, res.usuario?.departamento || null, res.dataInicio, res.dataFim, res.status || 'CONFIRMADA']);
   }
 };
 
@@ -160,7 +236,13 @@ export const syncPush = async () => {
     let dados = log.dados ? JSON.parse(log.dados) : null;
     let falhouImagem = false;
     
-    if (log.tipo === 'NOVO_EQUIPAMENTO' && dados && dados.fotoUrl && dados.fotoUrl.startsWith('file://')) {
+    const isLocalFile = dados && dados.fotoUrl && (
+      dados.fotoUrl.startsWith('file:') || 
+      dados.fotoUrl.startsWith('/') || 
+      dados.fotoUrl.startsWith('content:')
+    );
+
+    if ((log.tipo === 'NOVO_EQUIPAMENTO' || log.tipo === 'NOVO_LOCAL') && isLocalFile) {
       try {
         const fileUri = dados.fotoUrl;
         const filename = fileUri.split('/').pop();
@@ -176,7 +258,7 @@ export const syncPush = async () => {
         
         if (uploadRes.status === 200 || uploadRes.status === 201) {
           const uploadData = JSON.parse(uploadRes.body);
-          dados.fotoUrl = uploadData.url; // Assinatura: URL final no servidor
+          dados.fotoUrl = uploadData.url; // Assinatura: URL final no servidor (/uploads/...)
         } else {
           console.error('Falha no upload da foto', uploadRes.body);
           falhouImagem = uploadRes.body || `HTTP Status ${uploadRes.status}`;
@@ -224,7 +306,28 @@ export const syncPush = async () => {
   
   const result = await res.json();
   if (result.success) {
-    // Apenas marca como sincronizado os logs que entraram no 'acoes' (que não falharam)
+    // Atualiza o status local para synced = 1
+    for (const acao of acoes) {
+      try {
+        if (acao.tipo === 'NOVO_LOCAL') {
+          db.runSync('UPDATE Local SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'NOVO_EQUIPAMENTO') {
+          db.runSync('UPDATE Equipamento SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'NOVA_RESERVA_LOCAL') {
+          db.runSync('UPDATE ReservaLocal SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'NOVA_CATEGORIA') {
+          db.runSync('UPDATE Categoria SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'NOVO_TIPO_EQUIPAMENTO') {
+          db.runSync('UPDATE TipoEquipamento SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'NOVA_AVARIA_REGISTRO' || acao.tipo === 'RESOLVER_AVARIA') {
+          db.runSync('UPDATE HistoricoAvaria SET synced = 1 WHERE id = ?', [acao.itemId]);
+        }
+      } catch (e) {
+        console.warn('Erro ao marcar entidade como synced:', e);
+      }
+    }
+
+    // Apenas remove os logs offline que foram enviados com sucesso
     for (const id of logsParaRemover) {
        db.runSync('UPDATE OfflineLog SET synced = 1 WHERE id = ?', [id]);
     }

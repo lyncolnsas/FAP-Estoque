@@ -1,4 +1,5 @@
 import * as Network from 'expo-network';
+import { getSyncHeaders } from './api';
 
 export const scanNetworkForServer = async (onProgress) => {
   try {
@@ -20,10 +21,12 @@ export const scanNetworkForServer = async (onProgress) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000); // Aumentado para 2000ms
         
+        const headers = await getSyncHeaders({ 'Accept': 'application/json' });
+        
         const response = await fetch(`http://${targetIp}:3333/sync/ping`, {
           method: 'GET',
           signal: controller.signal,
-          headers: { 'Accept': 'application/json' }
+          headers
         });
         clearTimeout(timeoutId);
 

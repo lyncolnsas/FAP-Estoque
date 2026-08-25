@@ -113,7 +113,9 @@ router.get('/pull', checkSyncPassword, async (req, res) => {
       requisicoes,
       tiposAvaria,
       historicoAvarias,
-      usuarios
+      usuarios,
+      locais,
+      reservasLocais
     ] = await Promise.all([
       prisma.equipamento.findMany(),
       prisma.categoria.findMany(),
@@ -131,6 +133,13 @@ router.get('/pull', checkSyncPassword, async (req, res) => {
       }),
       prisma.usuario.findMany({
         select: { id: true, nome: true, departamento: true, whatsapp: true }
+      }),
+      prisma.local.findMany(),
+      prisma.reservaLocal.findMany({
+        include: {
+          local: true,
+          usuario: { select: { id: true, nome: true, departamento: true } }
+        }
       })
     ]);
 
@@ -148,7 +157,9 @@ router.get('/pull', checkSyncPassword, async (req, res) => {
       itensRequisicao,
       tiposAvaria,
       historicoAvarias,
-      usuarios
+      usuarios,
+      locais,
+      reservasLocais
     });
   } catch (error) {
     console.error('Erro no PULL:', error);
@@ -438,7 +449,231 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             }).catch(e => console.warn('Erro ao registrar avaria inicial:', e));
           }
         }
+
+        if (acao.tipo === 'EMPRESTIMO_OFFLINE') {
+          const { equipamentoId, solicitanteNome, departamento, dataCriacao } = acao.dados || {};
+          const reqId = acao.itemId || `emp-${Date.now()}`;
+
+          if (equipamentoId && solicitanteNome) {
+            // 1. Tenta associar a um usuário existente no banco
+            const usuario = await prisma.usuario.findFirst({
+              where: { nome: solicitanteNome }
+            });
+
+            // 2. Cria a requisição caso não exista
+            const reqExists = await prisma.requisicao.findUnique({ where: { id: reqId } });
+            if (!reqExists) {
+              const dataInicio = dataCriacao ? new Date(dataCriacao) : new Date();
+              const dataFim = new Date(dataInicio.getTime() + 24 * 60 * 60 * 1000);
+
+              await prisma.requisicao.create({
+                data: {
+                  id: reqId,
+                  solicitanteNome: solicitanteNome,
+                  departamento: departamento || (usuario?.departamento) || 'Geral',
+                  solicitanteWhatsapp: usuario?.whatsapp || null,
+                  usuarioId: usuario?.id || null,
+                  status: 'EMPRESTADO',
+                  dataInicioEvento: dataInicio,
+                  dataFimEvento: dataFim,
+                  dataRetiradaSugerida: dataInicio
+                }
+              });
+            }
+
+            // 3. Cria ou atualiza o ItemRequisicao
+            const itemId = `item-${reqId}`;
+            const itemExists = await prisma.itemRequisicao.findFirst({
+              where: {
+                OR: [
+                  { id: itemId },
+                  { requisicaoId: reqId, equipamentoId: equipamentoId }
+                ]
+              }
+            });
+
+            if (!itemExists) {
+              await prisma.itemRequisicao.create({
+                data: {
+                  id: itemId,
+                  requisicaoId: reqId,
+                  equipamentoId: equipamentoId,
+                  statusSeparacao: true,
+                  statusDevolucao: false
+                }
+              });
+            } else {
+              await prisma.itemRequisicao.update({
+                where: { id: itemExists.id },
+                data: { statusSeparacao: true, statusDevolucao: false }
+              });
+            }
+
+            // 4. Atualiza o status do Equipamento para EMPRESTADO
+            await prisma.equipamento.update({
+              where: { id: equipamentoId },
+              data: {
+                statusCondicao: 'EMPRESTADO',
+                quantidadeUso: { increment: 1 }
+              }
+            }).catch(e => console.warn('[SYNC] Erro ao atualizar status do equipamento:', e));
+
+            logs.push(`Empréstimo ${reqId} do equipamento ${equipamentoId} para ${solicitanteNome} registrado no servidor.`);
+          }
+        }
+
+        if (acao.tipo === 'NOVA_CATEGORIA') {
+          const { id, nome } = acao.dados || {};
+          if (nome) {
+            const existingCat = await prisma.categoria.findFirst({ where: { nome } });
+            if (!existingCat) {
+              await prisma.categoria.create({
+                data: { id: id || undefined, nome }
+              });
+              logs.push(`Categoria "${nome}" criada no servidor.`);
+            } else {
+              logs.push(`Categoria "${nome}" já existente.`);
+            }
+          }
+        }
+
+        if (acao.tipo === 'NOVO_TIPO_EQUIPAMENTO') {
+          const { id, categoriaId, nome, categoriaNome } = acao.dados || {};
+          if (nome) {
+            let cat = categoriaId ? await prisma.categoria.findUnique({ where: { id: categoriaId } }) : null;
+            if (!cat && categoriaNome) {
+              cat = await prisma.categoria.findFirst({ where: { nome: categoriaNome } });
+            }
+            if (!cat) {
+              cat = await prisma.categoria.findFirst({ where: { nome: 'Sem Categoria' } });
+              if (!cat) cat = await prisma.categoria.create({ data: { nome: 'Sem Categoria' } });
+            }
+
+            const existingTipo = await prisma.tipoEquipamento.findFirst({
+              where: { nome, categoriaId: cat.id }
+            });
+            if (!existingTipo) {
+              await prisma.tipoEquipamento.create({
+                data: { id: id || undefined, nome, categoriaId: cat.id }
+              });
+              logs.push(`Tipo "${nome}" vinculado à categoria "${cat.nome}" criado.`);
+            }
+          }
+        }
+
+        if (acao.tipo === 'NOVO_LOCAL') {
+          const { id, nome, capacidade, fotoUrl } = acao.dados || {};
+          if (nome) {
+            const existingLocal = await prisma.local.findFirst({ where: { nome } });
+            if (existingLocal) {
+              await prisma.local.update({
+                where: { id: existingLocal.id },
+                data: {
+                  capacidade: capacidade ? Number(capacidade) : existingLocal.capacidade,
+                  fotoUrl: fotoUrl || existingLocal.fotoUrl
+                }
+              });
+              logs.push(`Local "${nome}" atualizado no servidor.`);
+            } else {
+              await prisma.local.create({
+                data: {
+                  id: id || undefined,
+                  nome,
+                  capacidade: capacidade ? Number(capacidade) : 0,
+                  fotoUrl: fotoUrl || null
+                }
+              });
+              logs.push(`Novo local "${nome}" cadastrado no servidor.`);
+            }
+          }
+        }
+
+        if (acao.tipo === 'NOVA_RESERVA_LOCAL') {
+          const { id, localId, localNome, solicitanteNome, dataInicio, dataFim } = acao.dados || {};
+          let targetLocalId = localId;
+          if (!targetLocalId && localNome) {
+            const l = await prisma.local.findFirst({ where: { nome: localNome } });
+            if (l) targetLocalId = l.id;
+          }
+          if (targetLocalId) {
+            let u = solicitanteNome ? await prisma.usuario.findFirst({ where: { nome: solicitanteNome } }) : null;
+            if (!u) {
+              u = await prisma.usuario.findFirst({ where: { role: 'ADMIN' } });
+            }
+            if (u) {
+              await prisma.reservaLocal.create({
+                data: {
+                  id: id || undefined,
+                  localId: targetLocalId,
+                  usuarioId: u.id,
+                  dataInicio: dataInicio ? new Date(dataInicio) : new Date(),
+                  dataFim: dataFim ? new Date(dataFim) : new Date(Date.now() + 2 * 3600000),
+                  status: 'CONFIRMADA'
+                }
+              });
+              logs.push(`Reserva do local sincronizada com sucesso.`);
+            }
+          }
+        }
+
+        if (acao.tipo === 'NOVO_TIPO_AVARIA') {
+          const { id, nome, descricao } = acao.dados || {};
+          if (nome) {
+            const existing = await prisma.tipoAvaria.findFirst({ where: { nome } });
+            if (!existing) {
+              await prisma.tipoAvaria.create({
+                data: { id: id || undefined, nome, descricao: descricao || null }
+              });
+              logs.push(`Tipo de Avaria "${nome}" cadastrado no servidor.`);
+            }
+          }
+        }
+
+        if (acao.tipo === 'NOVA_AVARIA_REGISTRO') {
+          const { id, equipamentoId, tipoAvariaId, descricao, dataRegistro } = acao.dados || {};
+          if (equipamentoId) {
+            await prisma.historicoAvaria.create({
+              data: {
+                id: id || undefined,
+                equipamentoId,
+                tipoAvariaId: tipoAvariaId || null,
+                descricao: descricao || 'Avaria reportada via aplicativo offline',
+                resolvido: false,
+                dataRegistro: dataRegistro ? new Date(dataRegistro) : new Date()
+              }
+            });
+            await prisma.equipamento.update({
+              where: { id: equipamentoId },
+              data: { statusCondicao: 'COM_DEFEITO' }
+            }).catch(() => {});
+            logs.push(`Avaria registrada para o equipamento ${equipamentoId}.`);
+          }
+        }
+
+        if (acao.tipo === 'RESOLVER_AVARIA') {
+          const targetId = acao.itemId || (acao.dados && acao.dados.avariaId);
+          const eqId = acao.dados && acao.dados.equipamentoId;
+          if (targetId) {
+            await prisma.historicoAvaria.update({
+              where: { id: targetId },
+              data: { resolvido: true, dataResolucao: new Date() }
+            }).catch(() => {});
+          }
+          if (eqId) {
+            const abertas = await prisma.historicoAvaria.count({
+              where: { equipamentoId: eqId, resolvido: false }
+            });
+            if (abertas === 0) {
+              await prisma.equipamento.update({
+                where: { id: eqId },
+                data: { statusCondicao: 'DISPONIVEL' }
+              }).catch(() => {});
+            }
+          }
+          logs.push(`Avaria ${targetId} resolvida no servidor.`);
+        }
       } catch (errAction) {
+
         console.error(`[SYNC] Erro ao processar ação ${acao.tipo}:`, errAction);
         logs.push(`Erro na ação ${acao.tipo}: ${errAction instanceof Error ? errAction.message : 'Erro interno'}`);
       }

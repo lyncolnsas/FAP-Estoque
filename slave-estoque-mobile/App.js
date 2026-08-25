@@ -9,6 +9,11 @@ import HomeScreen from './src/screens/Home';
 import QRScannerScreen from './src/screens/QRScanner';
 import BarcodeScannerScreen from './src/screens/BarcodeScanner';
 import CadastrarEquipamentoScreen from './src/screens/CadastrarEquipamento';
+import EmprestimoScreen from './src/screens/EmprestimoScreen';
+import CadastrarCategoriaScreen from './src/screens/CadastrarCategoria';
+import CadastrarLocalScreen from './src/screens/CadastrarLocal';
+import ReservarLocalScreen from './src/screens/ReservarLocal';
+import CadastrarAvariaScreen from './src/screens/CadastrarAvaria';
 
 const Stack = createNativeStackNavigator();
 
@@ -66,7 +71,12 @@ export default function App() {
             contentStyle: { backgroundColor: 'transparent' }
           }} 
         />
-        <Stack.Screen name="CadastrarEquipamento" component={CadastrarEquipamentoScreen} options={{ title: 'Novo Equipamento' }} />
+        <Stack.Screen name="CadastrarEquipamento" component={CadastrarEquipamentoScreen} options={{ title: 'Novo Material / Equipamento' }} />
+        <Stack.Screen name="Emprestimo" component={EmprestimoScreen} options={{ title: 'Novo Empréstimo', headerStyle: { backgroundColor: '#4f46e5' }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' } }} />
+        <Stack.Screen name="CadastrarCategoria" component={CadastrarCategoriaScreen} options={{ title: 'Categorias & Subtipos' }} />
+        <Stack.Screen name="CadastrarLocal" component={CadastrarLocalScreen} options={{ title: 'Locais & Espaços' }} />
+        <Stack.Screen name="ReservarLocal" component={ReservarLocalScreen} options={{ title: 'Reserva de Espaço' }} />
+        <Stack.Screen name="CadastrarAvaria" component={CadastrarAvariaScreen} options={{ title: 'Avarias & Manutenções' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -10,8 +10,8 @@ export const initDB = () => {
       nome TEXT,
       categoriaId TEXT,
       tipoId TEXT,
-      statusCondicao TEXT,
-      permitirEmprestimo INTEGER,
+      statusCondicao TEXT DEFAULT 'DISPONIVEL',
+      permitirEmprestimo INTEGER DEFAULT 1,
       recebeuComDefeito INTEGER DEFAULT 0,
       fotoUrl TEXT,
       synced INTEGER DEFAULT 1
@@ -19,13 +19,15 @@ export const initDB = () => {
 
     CREATE TABLE IF NOT EXISTS Categoria (
       id TEXT PRIMARY KEY,
-      nome TEXT
+      nome TEXT,
+      synced INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS TipoEquipamento (
       id TEXT PRIMARY KEY,
       categoriaId TEXT,
-      nome TEXT
+      nome TEXT,
+      synced INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS Requisicao (
@@ -59,7 +61,8 @@ export const initDB = () => {
       descricao TEXT,
       resolvido INTEGER DEFAULT 0,
       dataRegistro TEXT,
-      dataResolucao TEXT
+      dataResolucao TEXT,
+      synced INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS OfflineLog (
@@ -77,6 +80,56 @@ export const initDB = () => {
       departamento TEXT,
       whatsapp TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS EmprestimoOffline (
+      id TEXT PRIMARY KEY,
+      equipamentoId TEXT,
+      equipamentoNome TEXT,
+      patrimonio TEXT,
+      solicitanteNome TEXT,
+      departamento TEXT,
+      dataCriacao TEXT,
+      synced INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS Local (
+      id TEXT PRIMARY KEY,
+      nome TEXT,
+      capacidade INTEGER DEFAULT 0,
+      fotoUrl TEXT,
+      synced INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS ReservaLocal (
+      id TEXT PRIMARY KEY,
+      localId TEXT,
+      usuarioId TEXT,
+      solicitanteNome TEXT,
+      departamento TEXT,
+      dataInicio TEXT,
+      dataFim TEXT,
+      status TEXT DEFAULT 'CONFIRMADA',
+      synced INTEGER DEFAULT 1
+    );
   `);
-  console.log('Banco de dados inicializado com sucesso.');
+
+  // Migrações seguras de colunas existentes (executadas para compatibilidade retroativa)
+  const safeAlter = (sql) => {
+    try { db.execSync(sql); } catch (e) {}
+  };
+
+  safeAlter(`ALTER TABLE Equipamento ADD COLUMN permitirEmprestimo INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Equipamento ADD COLUMN recebeuComDefeito INTEGER DEFAULT 0;`);
+  safeAlter(`ALTER TABLE Equipamento ADD COLUMN fotoUrl TEXT;`);
+  safeAlter(`ALTER TABLE Equipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Local ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Local ADD COLUMN capacidade INTEGER DEFAULT 0;`);
+  safeAlter(`ALTER TABLE Local ADD COLUMN fotoUrl TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE HistoricoAvaria ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Categoria ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE TipoEquipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
+
+  console.log('Banco de dados SQLite inicializado com sucesso.');
 };
