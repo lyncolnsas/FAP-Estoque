@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   Image, Alert, ScrollView, Modal, FlatList,
-  ActivityIndicator, SafeAreaView, Platform
+  ActivityIndicator, SafeAreaView, Platform, StatusBar
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -10,14 +10,17 @@ import { db } from "../db/database";
 import { imprimirEtiqueta } from "../services/printer";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
 import ImageCropModal from "../components/ImageCropModal";
+import { API_URL } from "../services/api";
 import {
   Camera, Image as ImageIcon, Plus, CheckSquare,
   Square, ChevronDown, Barcode, Trash2, X, RefreshCw,
-  Crop, Sliders
+  Crop, Sliders, Check, QrCode, Save, Wrench, AlertTriangle, CheckCircle2
 } from "lucide-react-native";
 
-export default function CadastrarEquipamentoScreen({ navigation }) {
+export default function CadastrarEquipamentoScreen({ navigation, route }) {
   const keyboardHeight = useKeyboardHeight();
+  const { equipamentoId, modoEdicao, codigoPatrimonio: codigoPatrimonioParam } = route?.params || {};
+  const isEditing = Boolean(equipamentoId || modoEdicao);
 
   // Form State
   const [nome, setNome] = useState("");
@@ -26,6 +29,7 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
   const [categoriaId, setCategoriaId] = useState("");
   const [tipoId, setTipoId] = useState("");
   const [permitirEmprestimo, setPermitirEmprestimo] = useState(true);
+  const [statusCondicao, setStatusCondicao] = useState("DISPONIVEL");
   const [recebeuComDefeito, setRecebeuComDefeito] = useState(false);
   const [avariaId, setAvariaId] = useState("");
   const [avariaDescricao, setAvariaDescricao] = useState("");
@@ -70,6 +74,53 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
   useEffect(() => {
     carregarAuxiliares();
   }, [carregarAuxiliares]);
+
+  // Carregar dados para edição se houver equipamentoId ou parametro
+  useEffect(() => {
+    if (equipamentoId) {
+      try {
+        const eqRows = db.getAllSync(
+          "SELECT * FROM Equipamento WHERE id = ? OR codigoPatrimonio = ?",
+          [equipamentoId, equipamentoId]
+        );
+        if (eqRows.length > 0) {
+          const eq = eqRows[0];
+          setNome(eq.nome || "");
+          setCodigoPatrimonio(eq.codigoPatrimonio || "");
+          setCategoriaId(eq.categoriaId || "");
+          setTipoId(eq.tipoId || "");
+          setPermitirEmprestimo(eq.permitirEmprestimo === 1 || eq.permitirEmprestimo === true);
+          setStatusCondicao(eq.statusCondicao || "DISPONIVEL");
+          setFotoUri(eq.fotoUrl || null);
+
+          if (eq.categoriaId) {
+            const filteredTipos = db.getAllSync(
+              "SELECT * FROM TipoEquipamento WHERE categoriaId = ? ORDER BY nome ASC",
+              [eq.categoriaId]
+            );
+            setTipos(filteredTipos);
+          }
+
+          // Carrega avaria ativa
+          const avs = db.getAllSync(
+            "SELECT * FROM HistoricoAvaria WHERE equipamentoId = ? AND (resolvido = 0 OR resolvido IS NULL) ORDER BY dataRegistro DESC",
+            [eq.id]
+          );
+          if (avs.length > 0) {
+            setRecebeuComDefeito(true);
+            setAvariaId(avs[0].tipoAvariaId || "");
+            setAvariaDescricao(avs[0].descricao || "");
+          } else {
+            setRecebeuComDefeito(eq.statusCondicao === "COM_DEFEITO");
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao carregar equipamento para edição:", e);
+      }
+    } else if (codigoPatrimonioParam) {
+      setCodigoPatrimonio(codigoPatrimonioParam);
+    }
+  }, [equipamentoId, codigoPatrimonioParam]);
 
   const handleSelectCategoria = (cat) => {
     setCategoriaId(cat.id);
@@ -187,21 +238,103 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
     if (!nome.trim()) {
       return Alert.alert("Atenção", "Preencha o nome do equipamento.");
     }
-    const qty = parseInt(quantidade, 10) || 1;
-    if (qty < 1) {
-      return Alert.alert("Atenção", "A quantidade deve ser pelo menos 1.");
-    }
-    if (qty === 1 && !codigoPatrimonio.trim()) {
+    if (!codigoPatrimonio.trim()) {
       return Alert.alert("Atenção", "Informe ou gere o código de patrimônio.");
-    }
-    if (recebeuComDefeito && !avariaId) {
-      return Alert.alert("Atenção", "Selecione o tipo de avaria inicial.");
     }
 
     setSaving(true);
     try {
+      // ----------------------------------------------------
+      // FLUXO DE EDIÇÃO
+      // ----------------------------------------------------
+      if (isEditing && equipamentoId) {
+        let statusFinal = statusCondicao;
+        if (recebeuComDefeito && statusFinal !== "EM_MANUTENCAO") {
+          statusFinal = "COM_DEFEITO";
+        } else if (!recebeuComDefeito && statusFinal === "COM_DEFEITO") {
+          statusFinal = "DISPONIVEL";
+        }
+
+        db.runSync(
+          `UPDATE Equipamento 
+           SET nome = ?, codigoPatrimonio = ?, categoriaId = ?, tipoId = ?, statusCondicao = ?, permitirEmprestimo = ?, recebeuComDefeito = ?, fotoUrl = ?, synced = 0
+           WHERE id = ?`,
+          [
+            nome.trim(),
+            codigoPatrimonio.trim(),
+            categoriaId || "",
+            tipoId || "",
+            statusFinal,
+            permitirEmprestimo ? 1 : 0,
+            recebeuComDefeito ? 1 : 0,
+            fotoUri,
+            equipamentoId
+          ]
+        );
+
+        if (recebeuComDefeito && avariaId) {
+          const idAvaria = `av-${Date.now()}`;
+          db.runSync(
+            `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro, synced)
+             VALUES (?, ?, null, ?, ?, 0, ?, 0)`,
+            [idAvaria, equipamentoId, avariaId, avariaDescricao.trim() || "Avaria atualizada no app", new Date().toISOString()]
+          );
+        } else if (statusFinal === "DISPONIVEL") {
+          db.runSync(
+            `UPDATE HistoricoAvaria SET resolvido = 1, dataResolucao = ?, synced = 0 WHERE equipamentoId = ? AND resolvido = 0`,
+            [new Date().toISOString(), equipamentoId]
+          );
+        }
+
+        const payload = JSON.stringify({
+          id: equipamentoId,
+          nome: nome.trim(),
+          codigoPatrimonio: codigoPatrimonio.trim(),
+          categoriaId: categoriaId || "",
+          tipoId: tipoId || "",
+          statusCondicao: statusFinal,
+          permitirEmprestimo,
+          recebeuComDefeito,
+          avariaId: recebeuComDefeito ? avariaId : null,
+          avariaDescricao: recebeuComDefeito ? avariaDescricao : null,
+          fotoUrl: fotoUri
+        });
+
+        db.runSync(
+          `INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)`,
+          ["EDITAR_EQUIPAMENTO", equipamentoId, payload, new Date().toISOString()]
+        );
+
+        Alert.alert(
+          "Alterações Salvas!",
+          `O equipamento "${nome}" foi atualizado com sucesso no banco offline.`,
+          [
+            { text: "Concluir", onPress: () => navigation.goBack() },
+            {
+              text: "Imprimir Etiqueta",
+              onPress: async () => {
+                await imprimirEtiqueta({ nome: nome.trim(), codigoPatrimonio: codigoPatrimonio.trim() }, "58mm");
+                navigation.goBack();
+              }
+            }
+          ]
+        );
+        return;
+      }
+
+      // ----------------------------------------------------
+      // FLUXO DE NOVO CADASTRO
+      // ----------------------------------------------------
+      const qty = parseInt(quantidade, 10) || 1;
+      if (qty < 1) {
+        return Alert.alert("Atenção", "A quantidade deve ser pelo menos 1.");
+      }
+      if (recebeuComDefeito && !avariaId) {
+        return Alert.alert("Atenção", "Selecione o tipo de avaria inicial.");
+      }
+
       const prefix = gerarCodigoBase();
-      const statusCondicao = recebeuComDefeito ? "COM_DEFEITO" : "DISPONIVEL";
+      const statusCondicaoFinal = recebeuComDefeito ? "COM_DEFEITO" : "DISPONIVEL";
       const baseNum = Math.floor(Math.random() * 80000 + 10000);
       const itensCriados = [];
 
@@ -214,15 +347,15 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
           [
             idOffline, code, nome.trim(), categoriaId || "", tipoId || "",
-            statusCondicao, permitirEmprestimo ? 1 : 0, recebeuComDefeito ? 1 : 0, fotoUri
+            statusCondicaoFinal, permitirEmprestimo ? 1 : 0, recebeuComDefeito ? 1 : 0, fotoUri
           ]
         );
 
         if (recebeuComDefeito) {
           const idAvaria = `av-${Date.now()}-${i}`;
           db.runSync(
-            `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro)
-             VALUES (?, ?, null, ?, ?, 0, ?)`,
+            `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro, synced)
+             VALUES (?, ?, null, ?, ?, 0, ?, 0)`,
             [idAvaria, idOffline, avariaId, avariaDescricao.trim() || "Defeito inicial cadastrado no app", new Date().toISOString()]
           );
         }
@@ -233,7 +366,7 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
           codigoPatrimonio: code,
           categoriaId: categoriaId || "",
           tipoId: tipoId || "",
-          statusCondicao,
+          statusCondicao: statusCondicaoFinal,
           permitirEmprestimo,
           recebeuComDefeito,
           avariaId: recebeuComDefeito ? avariaId : null,
@@ -269,7 +402,7 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
       );
     } catch (e) {
       console.error(e);
-      Alert.alert("Erro", "Não foi possível cadastrar o equipamento.");
+      Alert.alert("Erro", "Não foi possível salvar o equipamento.");
     } finally {
       setSaving(false);
     }
@@ -280,6 +413,11 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
   const avariaSelecionada = tiposAvaria.find(a => a.id === avariaId);
   const qtyNum = parseInt(quantidade, 10) || 1;
 
+  // Imagem para exibição
+  const displayImageUri = fotoUri
+    ? (fotoUri.startsWith('/uploads') ? `${API_URL}${fotoUri}` : fotoUri)
+    : null;
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={{ flex: 1 }}>
@@ -288,18 +426,38 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {/* CABEÇALHO DO MODO */}
+          {isEditing && (
+            <View style={styles.editModeHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <QrCode size={20} color="#4f46e5" />
+                <View>
+                  <Text style={styles.editModeTitle}>Modo de Edição de Equipamento</Text>
+                  <Text style={styles.editModeSub}>Patrimônio: {codigoPatrimonio}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.btnScanAnother}
+                onPress={() => navigation.replace("BarcodeScanner", { acao: "EDITAR" })}
+              >
+                <Barcode size={16} color="#4f46e5" />
+                <Text style={styles.btnScanAnotherText}>Outro QR</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* FOTO COM AJUSTE DE ROTAÇÃO E CORTE QUADRADO */}
           <Text style={styles.sectionLabel}>Foto (Formato Quadrado 1:1)</Text>
-          {fotoUri ? (
+          {displayImageUri ? (
             <View style={styles.squarePhotoWrapper}>
               <View style={styles.squarePhotoContainer}>
-                <Image source={{ uri: fotoUri }} style={styles.squarePhoto} resizeMode="cover" />
+                <Image source={{ uri: displayImageUri }} style={styles.squarePhoto} resizeMode="cover" />
               </View>
               <View style={styles.photoControlsRow}>
                 <TouchableOpacity
                   style={styles.photoControlBtn}
                   onPress={() => {
-                    setCropImageRaw(fotoUri);
+                    setCropImageRaw(displayImageUri);
                     setShowCropModal(true);
                   }}
                 >
@@ -347,51 +505,131 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
           />
 
           {/* QUANTIDADE E CÓDIGO */}
-          <View style={styles.row}>
-            <View style={{ width: 110, marginRight: 10 }}>
-              <Text style={styles.sectionLabel}>Quantidade</Text>
-              <TextInput
-                style={styles.input}
-                value={quantidade}
-                onChangeText={setQuantidade}
-                keyboardType="numeric"
-              />
+          {!isEditing ? (
+            <View style={styles.row}>
+              <View style={{ width: 110, marginRight: 10 }}>
+                <Text style={styles.sectionLabel}>Quantidade</Text>
+                <TextInput
+                  style={styles.input}
+                  value={quantidade}
+                  onChangeText={setQuantidade}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionLabel}>
+                  {qtyNum > 1 ? "Geração em Lote" : "Código de Patrimônio"}
+                </Text>
+                {qtyNum > 1 ? (
+                  <View style={styles.batchInfoBox}>
+                    <Text style={styles.batchInfoText}>
+                      Gerará {qtyNum} código(s) automático(s)
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.patrimonioRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0, marginRight: 6 }]}
+                      value={codigoPatrimonio}
+                      onChangeText={setCodigoPatrimonio}
+                      placeholder="Ex: CAM-10492"
+                      placeholderTextColor="#94a3b8"
+                    />
+                    <TouchableOpacity style={styles.iconBtn} onPress={gerarPatrimonioUnico}>
+                      <RefreshCw size={18} color="#4f46e5" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.iconBtn, { backgroundColor: "#f1f5f9" }]}
+                      onPress={async () => {
+                        if (!hasCameraPermission?.granted) await requestCameraPermission();
+                        setScannerVisible(true);
+                      }}
+                    >
+                      <Barcode size={18} color="#0f172a" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sectionLabel}>
-                {qtyNum > 1 ? "Geração em Lote" : "Código de Patrimônio"}
-              </Text>
-              {qtyNum > 1 ? (
-                <View style={styles.batchInfoBox}>
-                  <Text style={styles.batchInfoText}>
-                    Gerará {qtyNum} código(s) automático(s)
+          ) : (
+            <View>
+              <Text style={styles.sectionLabel}>Código de Patrimônio (Identificador)</Text>
+              <View style={styles.patrimonioRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1, marginBottom: 0, marginRight: 6 }]}
+                  value={codigoPatrimonio}
+                  onChangeText={setCodigoPatrimonio}
+                  placeholder="Ex: CAM-10492"
+                  placeholderTextColor="#94a3b8"
+                />
+                <TouchableOpacity
+                  style={[styles.iconBtn, { backgroundColor: "#f1f5f9" }]}
+                  onPress={async () => {
+                    if (!hasCameraPermission?.granted) await requestCameraPermission();
+                    setScannerVisible(true);
+                  }}
+                >
+                  <Barcode size={18} color="#0f172a" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* STATUS DE CONDIÇÃO (SE MODO EDIÇÃO) */}
+          {isEditing && (
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.sectionLabel}>Status Atual de Funcionamento</Text>
+              <View style={styles.statusOptionsRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.statusOptionBtn,
+                    statusCondicao === "DISPONIVEL" && styles.statusOptionDisponivelActive
+                  ]}
+                  onPress={() => {
+                    setStatusCondicao("DISPONIVEL");
+                    setRecebeuComDefeito(false);
+                  }}
+                >
+                  <CheckCircle2 size={16} color={statusCondicao === "DISPONIVEL" ? "#059669" : "#64748b"} />
+                  <Text style={[styles.statusOptionText, statusCondicao === "DISPONIVEL" && styles.statusOptionDisponivelText]}>
+                    Disponível
                   </Text>
-                </View>
-              ) : (
-                <View style={styles.patrimonioRow}>
-                  <TextInput
-                    style={[styles.input, { flex: 1, marginBottom: 0, marginRight: 6 }]}
-                    value={codigoPatrimonio}
-                    onChangeText={setCodigoPatrimonio}
-                    placeholder="Ex: CAM-10492"
-                    placeholderTextColor="#94a3b8"
-                  />
-                  <TouchableOpacity style={styles.iconBtn} onPress={gerarPatrimonioUnico}>
-                    <RefreshCw size={18} color="#4f46e5" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.iconBtn, { backgroundColor: "#f1f5f9" }]}
-                    onPress={async () => {
-                      if (!hasCameraPermission?.granted) await requestCameraPermission();
-                      setScannerVisible(true);
-                    }}
-                  >
-                    <Barcode size={18} color="#0f172a" />
-                  </TouchableOpacity>
-                </View>
-              )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.statusOptionBtn,
+                    statusCondicao === "COM_DEFEITO" && styles.statusOptionDefeitoActive
+                  ]}
+                  onPress={() => {
+                    setStatusCondicao("COM_DEFEITO");
+                    setRecebeuComDefeito(true);
+                  }}
+                >
+                  <AlertTriangle size={16} color={statusCondicao === "COM_DEFEITO" ? "#dc2626" : "#64748b"} />
+                  <Text style={[styles.statusOptionText, statusCondicao === "COM_DEFEITO" && styles.statusOptionDefeitoText]}>
+                    Com Defeito
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.statusOptionBtn,
+                    statusCondicao === "EM_MANUTENCAO" && styles.statusOptionManutencaoActive
+                  ]}
+                  onPress={() => {
+                    setStatusCondicao("EM_MANUTENCAO");
+                    setRecebeuComDefeito(true);
+                  }}
+                >
+                  <Wrench size={16} color={statusCondicao === "EM_MANUTENCAO" ? "#d97706" : "#64748b"} />
+                  <Text style={[styles.statusOptionText, statusCondicao === "EM_MANUTENCAO" && styles.statusOptionManutencaoText]}>
+                    Manutenção
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          )}
 
           {/* CATEGORIA E TIPO */}
           <View style={styles.row}>
@@ -437,27 +675,29 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
             </View>
           </View>
 
-          {/* CHECKBOX: DEFEITO INICIAL */}
-          <TouchableOpacity
-            style={[styles.cardCheckbox, recebeuComDefeito && styles.cardCheckboxDefeito]}
-            onPress={() => setRecebeuComDefeito(!recebeuComDefeito)}
-            activeOpacity={0.8}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center" }}>
-              {recebeuComDefeito ? (
-                <CheckSquare size={20} color="#dc2626" />
-              ) : (
-                <Square size={20} color="#94a3b8" />
-              )}
-              <Text style={[styles.cardCheckboxText, recebeuComDefeito && { color: "#dc2626", fontWeight: "700" }]}>
-                Registrar com defeito inicial
-              </Text>
-            </View>
-          </TouchableOpacity>
+          {/* CHECKBOX: DEFEITO / AVARIA */}
+          {!isEditing && (
+            <TouchableOpacity
+              style={[styles.cardCheckbox, recebeuComDefeito && styles.cardCheckboxDefeito]}
+              onPress={() => setRecebeuComDefeito(!recebeuComDefeito)}
+              activeOpacity={0.8}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                {recebeuComDefeito ? (
+                  <CheckSquare size={20} color="#dc2626" />
+                ) : (
+                  <Square size={20} color="#94a3b8" />
+                )}
+                <Text style={[styles.cardCheckboxText, recebeuComDefeito && { color: "#dc2626", fontWeight: "700" }]}>
+                  Registrar com defeito inicial
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
 
           {recebeuComDefeito && (
             <View style={styles.defeitoBox}>
-              <Text style={styles.sectionLabel}>Tipo de Avaria</Text>
+              <Text style={styles.sectionLabel}>Tipo de Avaria / Defeito</Text>
               <TouchableOpacity
                 style={[styles.selectorBtn, avariaSelecionada && styles.selectorBtnActive]}
                 onPress={() => setShowModalAvaria(true)}
@@ -498,9 +738,13 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
             </View>
           </TouchableOpacity>
 
-          {/* BOTÃO CADASTRAR */}
+          {/* BOTÃO SALVAR / CADASTRAR */}
           <TouchableOpacity
-            style={[styles.btnCadastrar, saving && { opacity: 0.7 }]}
+            style={[
+              styles.btnCadastrar,
+              isEditing && { backgroundColor: "#4f46e5" },
+              saving && { opacity: 0.7 }
+            ]}
             onPress={handleSalvarEquipamento}
             disabled={saving}
           >
@@ -508,8 +752,14 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
               <ActivityIndicator color="#fff" />
             ) : (
               <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Plus size={20} color="#fff" style={{ marginRight: 6 }} />
-                <Text style={styles.btnCadastrarText}>Cadastrar Equipamento</Text>
+                {isEditing ? (
+                  <Save size={20} color="#fff" style={{ marginRight: 6 }} />
+                ) : (
+                  <Plus size={20} color="#fff" style={{ marginRight: 6 }} />
+                )}
+                <Text style={styles.btnCadastrarText}>
+                  {isEditing ? "Salvar Alterações" : "Cadastrar Equipamento"}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -676,7 +926,9 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
               facing="back"
               barcodeScannerSettings={{ barcodeTypes: ["code128", "qr", "ean13", "ean8"] }}
               onBarcodeScanned={({ data }) => {
-                setCodigoPatrimonio(data);
+                let code = data;
+                if (code.includes("/")) code = code.split("/").pop();
+                setCodigoPatrimonio(code);
                 setScannerVisible(false);
               }}
             />
@@ -694,8 +946,37 @@ export default function CadastrarEquipamentoScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#ffffff" },
+  container: {
+    flex: 1,
+    backgroundColor: "#ffffff",
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 24) : 0,
+  },
   scroll: { padding: 20, paddingBottom: 140 },
+  editModeHeader: {
+    backgroundColor: "#eef2ff",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#c7d2fe"
+  },
+  editModeTitle: { fontSize: 14, fontWeight: "700", color: "#3730a3" },
+  editModeSub: { fontSize: 12, color: "#4f46e5", fontWeight: "600", marginTop: 2 },
+  btnScanAnother: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+  btnScanAnotherText: { fontSize: 12, fontWeight: "700", color: "#4f46e5" },
   sectionLabel: { fontSize: 13, fontWeight: "600", color: "#334155", marginBottom: 6, marginTop: 12 },
   labelWithAdd: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   addInlineText: { fontSize: 12, fontWeight: "700", color: "#2563eb", marginTop: 12 },
@@ -714,6 +995,26 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   batchInfoText: { color: "#2563eb", fontWeight: "600", fontSize: 13 },
+  statusOptionsRow: { flexDirection: "row", gap: 8, marginTop: 2 },
+  statusOptionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#f8fafc"
+  },
+  statusOptionText: { fontSize: 12, fontWeight: "600", color: "#64748b" },
+  statusOptionDisponivelActive: { borderColor: "#10b981", backgroundColor: "#ecfdf5" },
+  statusOptionDisponivelText: { color: "#059669", fontWeight: "700" },
+  statusOptionDefeitoActive: { borderColor: "#ef4444", backgroundColor: "#fef2f2" },
+  statusOptionDefeitoText: { color: "#dc2626", fontWeight: "700" },
+  statusOptionManutencaoActive: { borderColor: "#f59e0b", backgroundColor: "#fffbeb" },
+  statusOptionManutencaoText: { color: "#d97706", fontWeight: "700" },
   selectorBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     backgroundColor: "#ffffff", borderWidth: 1.5, borderColor: "#e2e8f0",

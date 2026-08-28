@@ -192,6 +192,22 @@ export class WhatsappSpecialist {
         number: c.id.split('@')[0]
       }));
   }
+
+  public async getProfilePictureUrl(jidOrPhone: string): Promise<string | null> {
+    if (!this.sock) return null;
+    try {
+      let jid = jidOrPhone.trim();
+      if (!jid.includes('@')) {
+        const clean = jid.replace(/\D/g, '');
+        if (clean.length < 8) return null;
+        jid = `${clean}@s.whatsapp.net`;
+      }
+      const url = await this.sock.profilePictureUrl(jid, 'image');
+      return url || null;
+    } catch (e) {
+      return null;
+    }
+  }
 }
 
 

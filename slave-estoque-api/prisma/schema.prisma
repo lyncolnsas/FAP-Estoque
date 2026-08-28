@@ -87,6 +87,7 @@ model Usuario {
   role         String       @default("SETOR") // ADMIN, ESTOQUISTA, SETOR
   departamento String?
   whatsapp     String?
+  fotoPerfilUrl String?
   corPersonalizada String?
   criadoEm     DateTime     @default(now())
 

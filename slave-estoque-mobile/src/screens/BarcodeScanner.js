@@ -10,7 +10,7 @@ const { width } = Dimensions.get('window');
 const scannerSize = width * 0.75;
 
 export default function BarcodeScannerScreen({ route, navigation }) {
-  const { acao, requisicaoId, solicitante } = route.params; // 'SEPARACAO' ou 'DEVOLUCAO'
+  const { acao, requisicaoId, solicitante } = route.params || {}; // 'SEPARACAO' | 'DEVOLUCAO' | 'EDITAR'
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
@@ -101,6 +101,31 @@ export default function BarcodeScannerScreen({ route, navigation }) {
       codigoBipado = codigoBipado.split('/').pop();
     }
 
+    // Modo EDITAR: Lê o QR Code e abre a edição completa do equipamento
+    if (acao === 'EDITAR') {
+      const equipamentos = db.getAllSync(
+        'SELECT * FROM Equipamento WHERE codigoPatrimonio = ? OR id = ?',
+        [codigoBipado, codigoBipado]
+      );
+      if (equipamentos.length > 0) {
+        const eq = equipamentos[0];
+        navigation.replace('CadastrarEquipamento', { equipamentoId: eq.id, modoEdicao: true });
+      } else {
+        Alert.alert(
+          'Não Encontrado',
+          `Equipamento com código "${codigoBipado}" não foi localizado no banco de dados local.`,
+          [
+            { text: 'Escanear Outro', onPress: () => setTimeout(() => setScanned(false), 500) },
+            { 
+              text: 'Cadastrar Novo', 
+              onPress: () => navigation.replace('CadastrarEquipamento', { codigoPatrimonio: codigoBipado }) 
+            }
+          ]
+        );
+      }
+      return;
+    }
+
     // Verifica se já bipou nesta sessão
     if (sessionScannedItems.find(i => i.codigoPatrimonio === codigoBipado)) {
       Alert.alert('Aviso', 'Item já escaneado nesta sessão!');
@@ -120,7 +145,7 @@ export default function BarcodeScannerScreen({ route, navigation }) {
          return;
       }
 
-      if (acao === 'DEVOLUCAO') {
+      if (acao === 'DEVOLUCAO' && requisicaoId) {
         const items = db.getAllSync('SELECT * FROM ItemRequisicao WHERE equipamentoId = ? AND requisicaoId = ? LIMIT 1', [eq.id, requisicaoId]);
         if (items.length === 0) {
            Alert.alert('Aviso', 'Este equipamento não pertence à lista desta requisição.');
@@ -172,7 +197,16 @@ export default function BarcodeScannerScreen({ route, navigation }) {
   };
 
   const registrarAcaoOffline = async (eq, reqIdOverride = null) => {
-    const finalReqId = reqIdOverride || requisicaoId || 'req-offline';
+    let finalReqId = reqIdOverride || requisicaoId;
+    if (!finalReqId && acao === 'DEVOLUCAO') {
+      const itemEmprestado = db.getFirstSync(
+        'SELECT requisicaoId FROM ItemRequisicao WHERE equipamentoId = ? AND (statusDevolucao = 0 OR statusDevolucao IS NULL) ORDER BY id DESC',
+        [eq.id]
+      );
+      finalReqId = itemEmprestado?.requisicaoId || 'req-offline';
+    }
+    if (!finalReqId) finalReqId = 'req-offline';
+
     try {
       let itemId = null;
       const items = db.getAllSync('SELECT * FROM ItemRequisicao WHERE equipamentoId = ? AND requisicaoId = ? LIMIT 1', [eq.id, finalReqId]);
@@ -199,8 +233,12 @@ export default function BarcodeScannerScreen({ route, navigation }) {
         db.runSync('UPDATE ItemRequisicao SET statusSeparacao = 1, synced = 0 WHERE id = ?', [itemId]);
         db.runSync('UPDATE Equipamento SET statusCondicao = "EMPRESTADO", synced = 0 WHERE id = ?', [eq.id]);
       } else if (acao === 'DEVOLUCAO') {
-        db.runSync('UPDATE ItemRequisicao SET statusDevolucao = 1, synced = 0 WHERE id = ?', [itemId]);
+        db.runSync('UPDATE ItemRequisicao SET statusDevolucao = 1, synced = 0 WHERE id = ? OR equipamentoId = ?', [itemId, eq.id]);
         db.runSync('UPDATE Equipamento SET statusCondicao = "DISPONIVEL", synced = 0 WHERE id = ?', [eq.id]);
+        db.runSync('UPDATE EmprestimoOffline SET synced = 1 WHERE equipamentoId = ? OR patrimonio = ?', [eq.id, eq.codigoPatrimonio]);
+        if (finalReqId && finalReqId !== 'req-offline') {
+          db.runSync('UPDATE Requisicao SET status = "DEVOLVIDO" WHERE id = ?', [finalReqId]);
+        }
       }
       return true;
     } catch (e) {
@@ -321,10 +359,20 @@ export default function BarcodeScannerScreen({ route, navigation }) {
           <View style={styles.unfocusedSide} />
         </View>
         <View style={styles.footerContainer}>
-          <Text style={styles.helperText}>Bipe o código de barras ou o QR Code do equipamento</Text>
-          <TouchableOpacity style={styles.finishBtn} onPress={() => setShowListModal(true)}>
-            <Text style={styles.finishBtnText}>✅ Conferir e Finalizar ({sessionScannedItems.length})</Text>
-          </TouchableOpacity>
+          <Text style={styles.helperText}>
+            {acao === 'EDITAR'
+              ? 'Aponte a câmera para o QR Code para abrir a edição'
+              : 'Bipe o código de barras ou o QR Code do equipamento'}
+          </Text>
+          {acao === 'EDITAR' ? (
+            <TouchableOpacity style={[styles.finishBtn, { backgroundColor: '#64748b' }]} onPress={() => navigation.goBack()}>
+              <Text style={styles.finishBtnText}>Voltar</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.finishBtn} onPress={() => setShowListModal(true)}>
+              <Text style={styles.finishBtnText}>✅ Conferir e Finalizar ({sessionScannedItems.length})</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
 import CryptoJS from 'crypto-js';
+import bcrypt from 'bcryptjs';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
@@ -132,13 +133,13 @@ router.get('/pull', checkSyncPassword, async (req, res) => {
         }
       }),
       prisma.usuario.findMany({
-        select: { id: true, nome: true, departamento: true, whatsapp: true }
+        select: { id: true, nome: true, departamento: true, whatsapp: true, fotoPerfilUrl: true, corPersonalizada: true, role: true }
       }),
       prisma.local.findMany(),
       prisma.reservaLocal.findMany({
         include: {
           local: true,
-          usuario: { select: { id: true, nome: true, departamento: true } }
+          usuario: { select: { id: true, nome: true, departamento: true, fotoPerfilUrl: true } }
         }
       })
     ]);
@@ -180,6 +181,66 @@ router.post('/push', checkSyncPassword, async (req, res) => {
 
     for (const acao of acoes || []) {
       try {
+        if (acao.tipo === 'NOVO_USUARIO') {
+          const { id, nome, departamento, whatsapp: userWhatsapp, fotoPerfilUrl } = acao.dados || {};
+          if (nome) {
+            const cleanName = String(nome).trim();
+            const existing = await prisma.usuario.findFirst({
+              where: {
+                OR: [
+                  { nome: { equals: cleanName } },
+                  ...(userWhatsapp ? [{ whatsapp: { equals: String(userWhatsapp).trim() } }] : [])
+                ]
+              }
+            });
+
+            if (!existing) {
+              const generatedEmail = `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.random().toString(36).substring(2, 6)}@estoque.local`;
+              const dummyHash = await bcrypt.hash('123456', 10);
+              let autoFoto = fotoPerfilUrl || null;
+              
+              if (userWhatsapp && (global as any).whatsappStatus === 'CONECTADO') {
+                try {
+                  const fetchedFoto = await whatsapp.getProfilePictureUrl(userWhatsapp);
+                  if (fetchedFoto) autoFoto = fetchedFoto;
+                } catch (e) {}
+              }
+
+              await prisma.usuario.create({
+                data: {
+                  id: id || undefined,
+                  nome: cleanName,
+                  departamento: departamento || 'Geral',
+                  whatsapp: userWhatsapp || null,
+                  email: generatedEmail,
+                  senhaHash: dummyHash,
+                  role: 'SETOR',
+                  fotoPerfilUrl: autoFoto
+                }
+              });
+              logs.push(`Novo usuário "${cleanName}" cadastrado via sincronização.`);
+            } else {
+              const dataUp: any = {};
+              if (departamento && (!existing.departamento || existing.departamento === 'Geral')) dataUp.departamento = departamento;
+              if (userWhatsapp && !existing.whatsapp) dataUp.whatsapp = userWhatsapp;
+              if (userWhatsapp && !existing.fotoPerfilUrl && (global as any).whatsappStatus === 'CONECTADO') {
+                try {
+                  const fetchedFoto = await whatsapp.getProfilePictureUrl(userWhatsapp);
+                  if (fetchedFoto) dataUp.fotoPerfilUrl = fetchedFoto;
+                } catch (e) {}
+              }
+              if (Object.keys(dataUp).length > 0) {
+                await prisma.usuario.update({
+                  where: { id: existing.id },
+                  data: dataUp
+                });
+              }
+              logs.push(`Usuário "${cleanName}" vinculado sem duplicação.`);
+            }
+          }
+          continue;
+        }
+
         if (acao.tipo === 'NOVA_REQUISICAO_AVULSA') {
           const { requisicaoId, solicitanteNome, departamento, whatsapp: reqWhatsapp, usuarioId } = acao.dados || {};
           if (requisicaoId) {
@@ -357,7 +418,7 @@ router.post('/push', checkSyncPassword, async (req, res) => {
           }
         }
         
-        if (acao.tipo === 'NOVO_EQUIPAMENTO') {
+        if (acao.tipo === 'NOVO_EQUIPAMENTO' || acao.tipo === 'EDITAR_EQUIPAMENTO') {
           let categoriaId = acao.dados.categoriaId;
           let tipoId = acao.dados.tipoId;
 
@@ -438,27 +499,90 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             logs.push(`Novo equipamento ${acao.dados.codigoPatrimonio} cadastrado.`);
           }
 
+          const targetEquipId = existingEquip ? existingEquip.id : acao.dados.id;
+
           if (recebeuComDefeito && acao.dados.avariaId) {
-            await prisma.historicoAvaria.create({
-              data: {
-                equipamentoId: existingEquip ? existingEquip.id : acao.dados.id,
-                tipoAvariaId: acao.dados.avariaId,
-                descricao: acao.dados.avariaDescricao || "Defeito inicial cadastrado via app offline",
-                resolvido: false
-              }
-            }).catch(e => console.warn('Erro ao registrar avaria inicial:', e));
+            const avariaAberta = await prisma.historicoAvaria.findFirst({
+              where: { equipamentoId: targetEquipId, tipoAvariaId: acao.dados.avariaId, resolvido: false }
+            });
+            if (!avariaAberta) {
+              await prisma.historicoAvaria.create({
+                data: {
+                  equipamentoId: targetEquipId,
+                  tipoAvariaId: acao.dados.avariaId,
+                  descricao: acao.dados.avariaDescricao || "Defeito cadastrado via app offline",
+                  resolvido: false
+                }
+              }).catch(e => console.warn('Erro ao registrar avaria:', e));
+            }
+          } else if (statusCondicao === 'DISPONIVEL' && !recebeuComDefeito) {
+            await prisma.historicoAvaria.updateMany({
+              where: { equipamentoId: targetEquipId, resolvido: false },
+              data: { resolvido: true, dataResolucao: new Date() }
+            }).catch(e => console.warn('Erro ao resolver avarias via sync:', e));
           }
         }
 
         if (acao.tipo === 'EMPRESTIMO_OFFLINE') {
-          const { equipamentoId, solicitanteNome, departamento, dataCriacao } = acao.dados || {};
+          const { equipamentoId, patrimonio, solicitanteNome, departamento, dataCriacao } = acao.dados || {};
           const reqId = acao.itemId || `emp-${Date.now()}`;
 
-          if (equipamentoId && solicitanteNome) {
-            // 1. Tenta associar a um usuário existente no banco
-            const usuario = await prisma.usuario.findFirst({
+          let targetEquipId = equipamentoId;
+          if (patrimonio && !targetEquipId) {
+            const eqByPatr = await prisma.equipamento.findUnique({ where: { codigoPatrimonio: patrimonio } });
+            if (eqByPatr) targetEquipId = eqByPatr.id;
+          } else if (targetEquipId) {
+            const eqExists = await prisma.equipamento.findUnique({ where: { id: targetEquipId } });
+            if (!eqExists && patrimonio) {
+              const eqByPatr = await prisma.equipamento.findUnique({ where: { codigoPatrimonio: patrimonio } });
+              if (eqByPatr) targetEquipId = eqByPatr.id;
+            }
+          }
+
+          if (targetEquipId && solicitanteNome) {
+            // 1. Tenta associar a um usuário existente no banco ou cria avulso
+            let usuario = await prisma.usuario.findFirst({
               where: { nome: solicitanteNome }
             });
+
+            const waNum = acao.dados?.whatsapp || usuario?.whatsapp || null;
+
+            if (!usuario) {
+              try {
+                const generatedEmail = `${solicitanteNome.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.random().toString(36).substring(2, 6)}@estoque.local`;
+                const dummyHash = await bcrypt.hash('123456', 10);
+                let autoFoto = null;
+                if (waNum && (global as any).whatsappStatus === 'CONECTADO') {
+                  try {
+                    autoFoto = await whatsapp.getProfilePictureUrl(waNum);
+                  } catch (e) {}
+                }
+                usuario = await prisma.usuario.create({
+                  data: {
+                    nome: solicitanteNome,
+                    departamento: departamento || 'Geral',
+                    whatsapp: waNum,
+                    email: generatedEmail,
+                    senhaHash: dummyHash,
+                    role: 'SETOR',
+                    fotoPerfilUrl: autoFoto
+                  }
+                });
+              } catch (e) {
+                console.warn('[SYNC] Erro ao criar usuário para empréstimo:', e);
+              }
+            } else if (usuario && (waNum || usuario.whatsapp) && !usuario.fotoPerfilUrl && (global as any).whatsappStatus === 'CONECTADO') {
+              const targetPhone = waNum || usuario.whatsapp;
+              try {
+                const autoFoto = await whatsapp.getProfilePictureUrl(targetPhone);
+                if (autoFoto) {
+                  await prisma.usuario.update({
+                    where: { id: usuario.id },
+                    data: { fotoPerfilUrl: autoFoto }
+                  });
+                }
+              } catch (e) {}
+            }
 
             // 2. Cria a requisição caso não exista
             const reqExists = await prisma.requisicao.findUnique({ where: { id: reqId } });
@@ -471,7 +595,7 @@ router.post('/push', checkSyncPassword, async (req, res) => {
                   id: reqId,
                   solicitanteNome: solicitanteNome,
                   departamento: departamento || (usuario?.departamento) || 'Geral',
-                  solicitanteWhatsapp: usuario?.whatsapp || null,
+                  solicitanteWhatsapp: waNum || usuario?.whatsapp || null,
                   usuarioId: usuario?.id || null,
                   status: 'EMPRESTADO',
                   dataInicioEvento: dataInicio,
@@ -482,12 +606,13 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             }
 
             // 3. Cria ou atualiza o ItemRequisicao
-            const itemId = `item-${reqId}`;
+            const itemId = `item-${reqId}-${targetEquipId}`;
             const itemExists = await prisma.itemRequisicao.findFirst({
               where: {
                 OR: [
                   { id: itemId },
-                  { requisicaoId: reqId, equipamentoId: equipamentoId }
+                  { id: `item-${reqId}` },
+                  { requisicaoId: reqId, equipamentoId: targetEquipId }
                 ]
               }
             });
@@ -497,7 +622,7 @@ router.post('/push', checkSyncPassword, async (req, res) => {
                 data: {
                   id: itemId,
                   requisicaoId: reqId,
-                  equipamentoId: equipamentoId,
+                  equipamentoId: targetEquipId,
                   statusSeparacao: true,
                   statusDevolucao: false
                 }
@@ -511,14 +636,14 @@ router.post('/push', checkSyncPassword, async (req, res) => {
 
             // 4. Atualiza o status do Equipamento para EMPRESTADO
             await prisma.equipamento.update({
-              where: { id: equipamentoId },
+              where: { id: targetEquipId },
               data: {
                 statusCondicao: 'EMPRESTADO',
                 quantidadeUso: { increment: 1 }
               }
             }).catch(e => console.warn('[SYNC] Erro ao atualizar status do equipamento:', e));
 
-            logs.push(`Empréstimo ${reqId} do equipamento ${equipamentoId} para ${solicitanteNome} registrado no servidor.`);
+            logs.push(`Empréstimo ${reqId} do equipamento ${targetEquipId} para ${solicitanteNome} registrado no servidor.`);
           }
         }
 

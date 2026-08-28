@@ -13,14 +13,15 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
-  Modal
+  Modal,
+  StatusBar
 } from 'react-native';
 import { db } from '../db/database';
 import { syncPull, syncPush, API_URL, setApiUrl, getApiUrl, getApiMemory, handshake } from '../services/api';
 import { scanNetworkForServer } from '../services/discovery';
 import { imprimirComprovante, imprimirEtiqueta } from '../services/printer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Settings, Upload, Download, PlusCircle, AlertTriangle, RefreshCw, Package, Printer, Server, Search, HandshakeIcon, Tag, Building2, Calendar, Wrench, FolderPlus, Layers } from 'lucide-react-native';
+import { Settings, Upload, Download, PlusCircle, AlertTriangle, RefreshCw, Package, Printer, Server, Search, HandshakeIcon, Tag, Building2, Calendar, Wrench, FolderPlus, Layers, Edit3, QrCode, X } from 'lucide-react-native';
 
 export default function HomeScreen({ navigation, route }) {
   const [activeTab, setActiveTab] = useState('DASHBOARD'); // 'DASHBOARD' | 'ACERVO' | 'AVARIAS' | 'REQUISICOES' | 'ACOES'
@@ -312,8 +313,7 @@ export default function HomeScreen({ navigation, route }) {
         return { bg: '#f1f3f4', text: '#5f6368' }; // Gray
     }
   };
-
-  const getStatusLabel = (status) => {
+      const getStatusLabel = (status) => {
     switch (status) {
       case 'DISPONIVEL': return 'Disponível';
       case 'EMPRESTADO': return 'Emprestado';
@@ -322,15 +322,19 @@ export default function HomeScreen({ navigation, route }) {
     }
   };
 
-  // Filtragem de Equipamentos
+  // Filtragem de Equipamentos segura e flexível
   const filteredEquipamentos = equipamentos.filter(eq => {
-    const matchesSearch = eq.nome.toLowerCase().includes(searchQuery.toLowerCase()) || eq.codigoPatrimonio.toLowerCase().includes(searchQuery.toLowerCase());
+    const nomeOk = (eq.nome || '').toLowerCase();
+    const patOk = (eq.codigoPatrimonio || '').toLowerCase();
+    const searchLower = (searchQuery || '').toLowerCase().trim();
+    const matchesSearch = !searchLower || nomeOk.includes(searchLower) || patOk.includes(searchLower);
     const matchesCategory = selectedCategory ? eq.categoriaId === selectedCategory : true;
     return matchesSearch && matchesCategory;
   });
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       {/* Server Status Header */}
       <View style={styles.header}>
         <View style={styles.headerTitleContainer}>
@@ -386,28 +390,47 @@ export default function HomeScreen({ navigation, route }) {
       <View style={styles.content}>
         {activeTab === 'DASHBOARD' && (
           <ScrollView contentContainerStyle={styles.dashboardContainer}>
-            {/* Stats Cards */}
+            {/* Stats Cards (Clicáveis) */}
             <View style={styles.statsGrid}>
-              <View style={styles.statCard}>
+              <TouchableOpacity 
+                style={styles.statCard} 
+                activeOpacity={0.7}
+                onPress={() => setActiveTab('ACERVO')}
+              >
                 <Text style={styles.statNumber}>{equipamentos.length}</Text>
-                <Text style={styles.statLabel}>Equipamentos</Text>
-              </View>
-              <View style={[styles.statCard, { borderLeftColor: '#f59e0b', borderLeftWidth: 4 }]}>
+                <Text style={styles.statLabel}>Equipamentos ›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.statCard, { borderLeftColor: '#f59e0b', borderLeftWidth: 4 }]} 
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('Emprestimo')}
+              >
                 <Text style={styles.statNumber}>
                   {equipamentos.filter(e => e.statusCondicao === 'EMPRESTADO').length}
                 </Text>
-                <Text style={styles.statLabel}>Emprestados</Text>
-              </View>
-              <View style={[styles.statCard, { borderLeftColor: '#ef4444', borderLeftWidth: 4 }]}>
+                <Text style={styles.statLabel}>Emprestados ›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.statCard, { borderLeftColor: '#ef4444', borderLeftWidth: 4 }]} 
+                activeOpacity={0.7}
+                onPress={() => setActiveTab('AVARIAS')}
+              >
                 <Text style={styles.statNumber}>
                   {avarias.filter(a => a.resolvido === 0).length}
                 </Text>
-                <Text style={styles.statLabel}>Avarias Ativas</Text>
-              </View>
-              <View style={[styles.statCard, { borderLeftColor: '#10b981', borderLeftWidth: 4 }]}>
+                <Text style={styles.statLabel}>Avarias Ativas ›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.statCard, { borderLeftColor: '#10b981', borderLeftWidth: 4 }]} 
+                activeOpacity={0.7}
+                onPress={() => setActiveTab('REQUISICOES')}
+              >
                 <Text style={styles.statNumber}>{requisicoes.length}</Text>
-                <Text style={styles.statLabel}>Requisições Ativas</Text>
-              </View>
+                <Text style={styles.statLabel}>Requisições Ativas ›</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Principal Actions */}
@@ -434,13 +457,13 @@ export default function HomeScreen({ navigation, route }) {
               </TouchableOpacity>
 
               <TouchableOpacity 
-                style={[styles.actionCard, { backgroundColor: '#f59e0b' }]} 
-                onPress={() => navigation.navigate('CadastrarEquipamento')}
+                style={[styles.actionCard, { backgroundColor: '#db2777' }]} 
+                onPress={() => navigation.navigate('BarcodeScanner', { acao: 'EDITAR' })}
               >
                 <View style={styles.actionIconContainer}>
-                  <PlusCircle size={24} color="#fff" />
+                  <QrCode size={24} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Novo Material</Text>
+                <Text style={styles.actionText}>Escanear & Editar</Text>
               </TouchableOpacity>
 
               <TouchableOpacity 
@@ -524,7 +547,7 @@ export default function HomeScreen({ navigation, route }) {
               </TouchableOpacity>
             </View>
 
-            {/* Sync Information */}
+            {/* Sync Card */}
             <View style={styles.syncCard}>
               <Text style={styles.syncCardTitle}>Sincronização Local</Text>
               <Text style={styles.syncCardDesc}>
@@ -533,15 +556,12 @@ export default function HomeScreen({ navigation, route }) {
               {API_URL ? (
                 <Text style={styles.syncIpText}>Computador: {API_URL}</Text>
               ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
                   <AlertTriangle size={16} color="#c5221f" style={{ marginRight: 6 }} />
                   <Text style={styles.syncIpTextWarning}>Computador não conectado</Text>
                 </View>
               )}
               <View style={{ flexDirection: 'column', gap: 10, marginTop: 14 }}>
-                <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#f59e0b' }]} onPress={handleScan} disabled={scanning}>
-                  <Text style={styles.syncButtonText}>{scanning ? 'Buscando...' : 'Scan de Rede'}</Text>
-                </TouchableOpacity>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
                   <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncPushOnly} disabled={syncing}>
                     <Upload size={16} color="#fff" style={{ marginRight: 6 }} />
@@ -556,6 +576,12 @@ export default function HomeScreen({ navigation, route }) {
                   <RefreshCw size={16} color="#fff" style={{ marginRight: 6 }} />
                   <Text style={styles.syncButtonText}>{syncing ? 'Processando...' : 'Sync Inteligente (Geral)'}</Text>
                 </TouchableOpacity>
+                {!API_URL && (
+                  <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#0284c7', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={() => navigation.navigate('QRScanner')}>
+                    <QrCode size={16} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.syncButtonText}>Ler QR Code do Servidor</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           </ScrollView>
@@ -563,17 +589,28 @@ export default function HomeScreen({ navigation, route }) {
 
         {activeTab === 'ACERVO' && (
           <View style={{ flex: 1 }}>
+            {/* Barra de Pesquisa */}
             <View style={styles.searchContainer}>
-              <TextInput 
-                style={styles.searchInput}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="Buscar por nome ou patrimônio..."
-                placeholderTextColor="#94a3b8"
-              />
+              <View style={styles.searchInputWrapper}>
+                <Search size={18} color="#94a3b8" style={{ marginRight: 8 }} />
+                <TextInput 
+                  style={styles.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Buscar por nome ou patrimônio..."
+                  placeholderTextColor="#94a3b8"
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }}>
+                    <X size={16} color="#94a3b8" />
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
-            <View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 10, gap: 8 }}>
+
+            {/* Chips de Categorias */}
+            <View style={{ backgroundColor: '#ffffff', paddingBottom: 10 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
                 <TouchableOpacity 
                   style={[styles.categoryFilter, !selectedCategory && styles.categoryFilterActive]}
                   onPress={() => setSelectedCategory(null)}
@@ -600,30 +637,31 @@ export default function HomeScreen({ navigation, route }) {
                 })}
               </ScrollView>
             </View>
+
+            {/* Lista de Equipamentos com Card Responsivo */}
             <FlatList
               data={filteredEquipamentos}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingBottom: 20 }}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 30, paddingTop: 6 }}
               renderItem={({ item }) => {
                 const colors = getStatusColor(item.statusCondicao);
                 return (
                   <View style={styles.itemCard}>
-                    <View style={{ flexDirection: 'row' }}>
+                    {/* Linha Superior: Foto, Dados e Status */}
+                    <View style={styles.itemCardTopRow}>
                       {item.fotoUrl ? (
-                        <Image source={{ uri: item.fotoUrl.startsWith('/uploads') ? `${API_URL}${item.fotoUrl}` : item.fotoUrl }} style={styles.itemThumb} />
+                        <Image
+                          source={{ uri: item.fotoUrl.startsWith('/uploads') ? `${API_URL}${item.fotoUrl}` : item.fotoUrl }}
+                          style={styles.itemThumb}
+                        />
                       ) : (
                         <View style={styles.itemThumbPlaceholder}>
-                          <Package size={24} color="#94a3b8" />
+                          <Package size={22} color="#94a3b8" />
                         </View>
                       )}
                       <View style={styles.itemDetails}>
                         <Text style={styles.itemName} numberOfLines={1}>{item.nome}</Text>
                         <Text style={styles.itemPatrimony}>Patr: {item.codigoPatrimonio}</Text>
-                        {item.synced === 0 && (
-                          <View style={styles.notSyncedBadge}>
-                            <Text style={styles.notSyncedText}>Aguardando Sync</Text>
-                          </View>
-                        )}
                       </View>
                       <View style={styles.itemRight}>
                         <View style={[styles.badge, { backgroundColor: colors.bg }]}>
@@ -633,21 +671,49 @@ export default function HomeScreen({ navigation, route }) {
                         </View>
                       </View>
                     </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-                      <TouchableOpacity style={{ marginRight: 10, padding: 4, flexDirection: 'row', alignItems: 'center' }} onPress={() => imprimirEtiqueta(item, '58mm')}>
-                        <Printer size={12} color="#1a73e8" style={{ marginRight: 4 }} />
-                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>Etiqueta 58mm</Text>
+
+                    {/* Linha Inferior de Ações (Editar e Imprimir 58/80mm) */}
+                    <View style={styles.itemCardActionsRow}>
+                      <TouchableOpacity 
+                        style={styles.actionPillEdit} 
+                        onPress={() => navigation.navigate('CadastrarEquipamento', { equipamentoId: item.id, modoEdicao: true })}
+                      >
+                        <Edit3 size={13} color="#4338ca" />
+                        <Text style={styles.actionPillEditText}>Editar</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={{ padding: 4, flexDirection: 'row', alignItems: 'center' }} onPress={() => imprimirEtiqueta(item, '80mm')}>
-                        <Printer size={12} color="#1a73e8" style={{ marginRight: 4 }} />
-                        <Text style={{ fontSize: 12, color: '#1a73e8', fontWeight: 'bold' }}>80mm</Text>
+
+                      <TouchableOpacity
+                        style={styles.actionPillPrint58} 
+                        onPress={() => imprimirEtiqueta(item, '58mm')}
+                      >
+                        <Printer size={13} color="#1d4ed8" />
+                        <Text style={styles.actionPillPrint58Text}>58mm</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.actionPillPrint80} 
+                        onPress={() => imprimirEtiqueta(item, '80mm')}
+                      >
+                        <Printer size={13} color="#475569" />
+                        <Text style={styles.actionPillPrint80Text}>80mm</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
                 );
               }}
               ListEmptyComponent={() => (
-                <Text style={styles.emptyListText}>Nenhum equipamento cadastrado no celular.</Text>
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyListTitle}>Nenhum equipamento encontrado</Text>
+                  <Text style={styles.emptyListSub}>Tente alterar o termo da busca ou categoria selecionada.</Text>
+                  {(searchQuery.length > 0 || selectedCategory) && (
+                    <TouchableOpacity
+                      style={styles.btnClearFilter}
+                      onPress={() => { setSearchQuery(''); setSelectedCategory(null); }}
+                    >
+                      <Text style={styles.btnClearFilterText}>Limpar Filtros</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               )}
             />
           </View>
@@ -853,30 +919,31 @@ export default function HomeScreen({ navigation, route }) {
 
       {/* MODAL SENHA */}
       <Modal visible={showPasswordPrompt} transparent={true} animationType="fade">
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Autenticação Necessária</Text>
-            <Text style={styles.modalText}>
+        <KeyboardAvoidingView style={styles.pwdModalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.pwdModalContent}>
+            <Text style={styles.pwdModalTitle}>Autenticação Necessária</Text>
+            <Text style={styles.pwdModalText}>
               Este servidor exige uma "Palavra-Passe" de sincronização para transmitir os dados com segurança.
             </Text>
             
             <TextInput
-              style={[styles.searchInput, { width: '100%', marginVertical: 15, textAlign: 'center', color: '#0f172a' }]}
-              placeholder="Digite a Palavra-passe"
+              style={styles.pwdInput}
+              placeholder="Digite a Palavra-Passe"
               placeholderTextColor="#94a3b8"
               secureTextEntry
               value={syncPassword}
               onChangeText={setSyncPassword}
               autoCapitalize="none"
               autoCorrect={false}
+              autoFocus={true}
             />
             
-            <View style={styles.modalButtonsRow}>
-              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#f1f5f9' }]} onPress={() => setShowPasswordPrompt(false)}>
-                <Text style={[styles.modalBtnText, { color: '#64748b' }]}>Cancelar</Text>
+            <View style={styles.pwdModalButtonsRow}>
+              <TouchableOpacity style={[styles.pwdModalBtn, { backgroundColor: '#f1f5f9' }]} onPress={() => setShowPasswordPrompt(false)}>
+                <Text style={[styles.pwdModalBtnText, { color: '#64748b' }]}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#10b981' }]} onPress={handleSavePassword}>
-                <Text style={styles.modalBtnText}>Salvar e Autenticar</Text>
+              <TouchableOpacity style={[styles.pwdModalBtn, { backgroundColor: '#10b981' }]} onPress={handleSavePassword}>
+                <Text style={[styles.pwdModalBtnText, { color: '#ffffff' }]}>Salvar e Autenticar</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -889,7 +956,8 @@ export default function HomeScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#f8fafc' 
+    backgroundColor: '#f8fafc',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0
   },
   header: { 
     flexDirection: 'row', 
@@ -1106,28 +1174,154 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, 
     borderBottomColor: '#f1f5f9' 
   },
-  searchInput: { 
-    backgroundColor: '#f8fafc', 
-    borderWidth: 1, 
-    borderColor: '#e2e8f0', 
-    borderRadius: 10, 
-    paddingHorizontal: 12, 
+  searchInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    fontSize: 14
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0f172a',
+    padding: 0,
+  },
+  categoryScroll: {
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  categoryFilter: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  categoryFilterActive: {
+    backgroundColor: '#4f46e5',
+    borderColor: '#4338ca',
+  },
+  categoryFilterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  categoryFilterTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
   itemCard: { 
-    flexDirection: 'row', 
+    flexDirection: 'column', 
     backgroundColor: '#ffffff', 
     marginHorizontal: 12, 
     marginTop: 10, 
-    borderRadius: 12, 
+    borderRadius: 14, 
     padding: 12,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
     elevation: 1
+  },
+  itemCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  itemCardActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    gap: 8,
+  },
+  actionPillEdit: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionPillEditText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4338ca',
+  },
+  actionPillPrint58: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionPillPrint58Text: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  actionPillPrint80: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionPillPrint80Text: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 30,
+    marginTop: 20,
+  },
+  emptyListTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  emptyListSub: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  btnClearFilter: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  btnClearFilterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563eb',
   },
   modalOverlay: {
     flex: 1,
@@ -1422,5 +1616,66 @@ const styles = StyleSheet.create({
   cadastroCardSub: {
     fontSize: 11,
     color: '#64748b'
+  },
+  pwdModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20
+  },
+  pwdModalContent: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8
+  },
+  pwdModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'center',
+    marginBottom: 8
+  },
+  pwdModalText: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 16
+  },
+  pwdInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    color: '#0f172a',
+    textAlign: 'center',
+    fontWeight: '600',
+    marginBottom: 18
+  },
+  pwdModalButtonsRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  pwdModalBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  pwdModalBtnText: {
+    fontSize: 14,
+    fontWeight: '700'
   }
 });

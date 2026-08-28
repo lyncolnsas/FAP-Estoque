@@ -8,7 +8,15 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
   try {
     // Resumo
     const totalEquipamentos = await prisma.equipamento.count();
-    const equipamentosComDefeito = await prisma.equipamento.count({ where: { statusCondicao: 'COM_DEFEITO' } });
+    const equipamentosComDefeito = await prisma.equipamento.count({ 
+      where: { 
+        OR: [
+          { statusCondicao: 'COM_DEFEITO' },
+          { statusCondicao: 'EM_MANUTENCAO' },
+          { historicoAvarias: { some: { resolvido: false } } }
+        ] 
+      } 
+    });
     const equipamentosEmprestados = await prisma.equipamento.count({ where: { statusCondicao: 'EMPRESTADO' } });
     const equipamentosDisponiveis = await prisma.equipamento.count({ where: { statusCondicao: 'DISPONIVEL' } });
     const equipamentosBaixados = await prisma.equipamento.count({ where: { statusCondicao: 'BAIXADO' } });
@@ -31,7 +39,10 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
           }
         },
         historicoAvarias: {
-          orderBy: { dataRegistro: 'desc' }
+          orderBy: { dataRegistro: 'desc' },
+          include: {
+            tipoAvaria: true
+          }
         }
       }
     });
@@ -74,6 +85,39 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
       }
     });
 
+    // Lista Completa de Solicitantes (Usuários e Avulsos) com métricas detalhadas
+    const usuariosDb = await prisma.usuario.findMany({
+      include: {
+        requisicoes: {
+          include: { itens: true }
+        }
+      },
+      orderBy: { nome: 'asc' }
+    });
+
+    const solicitantes = usuariosDb.map(u => {
+      const totalReqs = u.requisicoes.length;
+      const totalItens = u.requisicoes.reduce((acc, r) => acc + r.itens.length, 0);
+      const itensAtivos = u.requisicoes
+        .filter(r => ['EMPRESTADO', 'EM_SEPARACAO', 'AGUARDANDO_ACEITE'].includes(r.status))
+        .reduce((acc, r) => acc + r.itens.filter(it => !it.statusDevolucao).length, 0);
+
+      return {
+        id: u.id,
+        nome: u.nome,
+        departamento: u.departamento || 'Geral',
+        whatsapp: u.whatsapp,
+        fotoPerfilUrl: u.fotoPerfilUrl,
+        corPersonalizada: u.corPersonalizada,
+        role: u.role,
+        isAvulso: u.role === 'AVULSO',
+        criadoEm: u.criadoEm,
+        totalRequisicoes: totalReqs,
+        totalItensEmprestados: totalItens,
+        itensAtivos
+      };
+    }).sort((a, b) => b.totalRequisicoes - a.totalRequisicoes);
+
     res.json({
       resumo: {
         totalEquipamentos,
@@ -84,6 +128,7 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
       },
       equipamentos,
       rankingUsuarios,
+      solicitantes,
       historicoAvarias,
       requisicoes
     });

@@ -1,11 +1,27 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { 
-  FileText, Download, TrendingUp, AlertTriangle, Package, CheckCircle, Clock, Users, Wrench, Activity
+  FileText, Download, TrendingUp, AlertTriangle, Package, CheckCircle, Clock, Users, Wrench, Activity,
+  Phone, UserCheck, Search
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { api } from '../lib/api';
+
+interface SolicitanteRelatorio {
+  id: string;
+  nome: string;
+  departamento: string;
+  whatsapp?: string;
+  fotoPerfilUrl?: string;
+  corPersonalizada?: string;
+  role: string;
+  isAvulso: boolean;
+  criadoEm: string;
+  totalRequisicoes: number;
+  totalItensEmprestados: number;
+  itensAtivos: number;
+}
 
 interface RelatorioGeral {
   resumo: {
@@ -16,6 +32,7 @@ interface RelatorioGeral {
     equipamentosBaixados: number;
   };
   rankingUsuarios: { nome: string, totalRequisicoes: number, totalItensEmprestados: number }[];
+  solicitantes?: SolicitanteRelatorio[];
   equipamentos: any[];
   historicoAvarias: any[];
   requisicoes: any[];
@@ -25,6 +42,9 @@ export default function AdminRelatorios() {
   const [data, setData] = useState<RelatorioGeral | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('visao-geral');
+  const [filtroSolicitantes, setFiltroSolicitantes] = useState<'TODOS' | 'AVULSOS' | 'SISTEMA'>('TODOS');
+  const [buscaSolicitante, setBuscaSolicitante] = useState('');
+  
   const { token } = useAuth();
 
   useEffect(() => {
@@ -101,57 +121,16 @@ export default function AdminRelatorios() {
 
     autoTable(doc, {
       startY: finalYResumo + 40,
-      head: [['Data', 'Equipamento', 'Patrimônio', 'Descrição da Avaria']],
+      head: [['Data', 'Equipamento', 'Patrimônio', 'Descrição']],
       body: avariasBody,
       theme: 'striped',
-      headStyles: { fillColor: [231, 76, 60] }
+      headStyles: { fillColor: [192, 57, 43] }
     });
 
-    // Ranking Usuários
-    const finalYAvarias = (doc as any).lastAutoTable.finalY || 250;
+    // Emprestados Atualmente
+    const finalYAvarias = (doc as any).lastAutoTable.finalY || 300;
     doc.setFontSize(14);
-    doc.text('3. Ranking de Usuários (Quem mais pegou)', 40, finalYAvarias + 30);
-
-    const rankingUsuariosArray = data.rankingUsuarios || [];
-    const rankingBody = rankingUsuariosArray.map(u => [
-      u.nome || 'Desconhecido',
-      (u.totalRequisicoes || 0).toString(),
-      (u.totalItensEmprestados || 0).toString()
-    ]);
-
-    autoTable(doc, {
-      startY: finalYAvarias + 40,
-      head: [['Solicitante', 'Qtd. Requisições (Vezes que pegou)', 'Total de Itens Pegos']],
-      body: rankingBody,
-      theme: 'striped',
-      headStyles: { fillColor: [155, 89, 182] }
-    });
-
-    // Requisições Pendentes/Ativas
-    const finalYRanking = (doc as any).lastAutoTable.finalY || 250;
-    doc.setFontSize(14);
-    doc.text('4. Requisições Ativas', 40, finalYRanking + 30);
-
-    const reqsBody = data.requisicoes.map(req => [
-      new Date(req.criadoEm).toLocaleDateString('pt-BR'),
-      req.solicitanteNome,
-      req.departamento,
-      req.status,
-      req.itens?.length?.toString() || '0'
-    ]);
-
-    autoTable(doc, {
-      startY: finalYRanking + 40,
-      head: [['Data Solicitação', 'Solicitante', 'Departamento', 'Status', 'Qtd. Itens']],
-      body: reqsBody,
-      theme: 'striped',
-      headStyles: { fillColor: [46, 204, 113] }
-    });
-
-    // Aparelhos Emprestados
-    doc.addPage();
-    doc.setFontSize(14);
-    doc.text('5. Aparelhos Emprestados', 40, 40);
+    doc.text('3. Equipamentos Emprestados no Momento', 40, finalYAvarias + 30);
 
     const emprestados = data.equipamentos.filter(e => e.statusCondicao === 'EMPRESTADO');
     const emprestadosBody = emprestados.map(eq => {
@@ -166,45 +145,34 @@ export default function AdminRelatorios() {
     });
 
     autoTable(doc, {
-      startY: 50,
-      head: [['Equipamento', 'Patrimônio', 'Quem Pegou', 'Data Início', 'Vezes Usado']],
+      startY: finalYAvarias + 40,
+      head: [['Equipamento', 'Patrimônio', 'Responsável Atual', 'Data Empréstimo', 'Vezes Usado']],
       body: emprestadosBody,
       theme: 'striped',
-      headStyles: { fillColor: [41, 128, 185] }
+      headStyles: { fillColor: [243, 156, 18] }
     });
 
-    // Aparelhos com Defeito / Avaria
-    const finalYEmprestados = (doc as any).lastAutoTable.finalY || 150;
+    // Solicitantes & Avulsos
+    doc.addPage();
     doc.setFontSize(14);
-    doc.text('6. Aparelhos em Manutenção / Com Avaria', 40, finalYEmprestados + 30);
+    doc.text('4. Solicitantes & Histórico de Retiradas', 40, 40);
 
-    const comDefeito = data.equipamentos.filter(e => 
-      e.statusCondicao === 'COM_DEFEITO' || 
-      e.recebeuComDefeito || 
-      (e.historicoAvarias && e.historicoAvarias.some((a: any) => !a.resolvido))
-    );
-    
-    const comDefeitoBody = comDefeito.map(eq => {
-      const avariaAtiva = eq.historicoAvarias?.find((a: any) => !a.resolvido);
-      let motivo = 'Sinalizado com defeito';
-      if (avariaAtiva) motivo = avariaAtiva.descricao;
-      else if (eq.recebeuComDefeito) motivo = 'Recebido com defeito';
-      
-      return [
-        eq.nome,
-        eq.codigoPatrimonio,
-        eq.statusCondicao,
-        motivo,
-        (eq.historicoAvarias?.length || 0).toString()
-      ];
-    });
+    const solicitantesBody = (data.solicitantes || []).map(s => [
+      s.nome,
+      s.departamento,
+      s.whatsapp || '-',
+      s.isAvulso ? 'Avulso' : 'Com Login',
+      s.totalRequisicoes.toString(),
+      s.totalItensEmprestados.toString(),
+      s.itensAtivos.toString()
+    ]);
 
     autoTable(doc, {
-      startY: finalYEmprestados + 40,
-      head: [['Equipamento', 'Patrimônio', 'Status', 'Avaria/Motivo', 'Vezes na Manutenção']],
-      body: comDefeitoBody,
+      startY: 50,
+      head: [['Solicitante', 'Departamento', 'WhatsApp', 'Tipo', 'Requisições', 'Total Itens', 'Itens Ativos']],
+      body: solicitantesBody,
       theme: 'striped',
-      headStyles: { fillColor: [231, 76, 60] }
+      headStyles: { fillColor: [39, 174, 96] }
     });
 
     // Salvando
@@ -219,6 +187,18 @@ export default function AdminRelatorios() {
     return <div className="p-8 text-center text-red-500">Erro ao carregar os dados.</div>;
   }
 
+  const solicitantesFiltrados = (data.solicitantes || []).filter(s => {
+    if (filtroSolicitantes === 'AVULSOS' && !s.isAvulso) return false;
+    if (filtroSolicitantes === 'SISTEMA' && s.isAvulso) return false;
+    if (buscaSolicitante.trim()) {
+      const termo = buscaSolicitante.toLowerCase();
+      return s.nome.toLowerCase().includes(termo) ||
+             (s.departamento && s.departamento.toLowerCase().includes(termo)) ||
+             (s.whatsapp && s.whatsapp.includes(termo));
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -226,7 +206,7 @@ export default function AdminRelatorios() {
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             <FileText className="text-blue-500" /> Relatórios
           </h2>
-          <p className="text-slate-500">Visão consolidada e exportação de dados.</p>
+          <p className="text-slate-500">Visão consolidada, métricas de solicitantes e exportação em PDF.</p>
         </div>
         <button 
           onClick={exportPDF}
@@ -246,6 +226,14 @@ export default function AdminRelatorios() {
           }`}
         >
           <Activity size={18} /> Visão Geral
+        </button>
+        <button 
+          onClick={() => setActiveTab('solicitantes')}
+          className={`pb-4 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap border-b-2 ${
+            activeTab === 'solicitantes' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+          }`}
+        >
+          <UserCheck size={18} /> Solicitantes & Avulsos
         </button>
         <button 
           onClick={() => setActiveTab('emprestados')}
@@ -273,42 +261,47 @@ export default function AdminRelatorios() {
         </button>
       </div>
 
+      {/* ABA: VISÃO GERAL */}
       {activeTab === 'visao-geral' && (
         <div className="space-y-6 animate-in fade-in duration-300">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="p-3 bg-blue-100 text-blue-600 rounded-lg"><Package size={24} /></div>
+              <div className="p-3 bg-blue-50 text-blue-500 rounded-lg">
+                <Package size={24} />
+              </div>
               <div>
-                <p className="text-sm text-slate-500 font-medium">Total Acervo</p>
+                <p className="text-slate-500 text-sm">Total Acervo</p>
                 <p className="text-2xl font-bold text-slate-800">{data.resumo.totalEquipamentos}</p>
               </div>
             </div>
+
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="p-3 bg-green-100 text-green-600 rounded-lg"><CheckCircle size={24} /></div>
+              <div className="p-3 bg-green-50 text-green-500 rounded-lg">
+                <CheckCircle size={24} />
+              </div>
               <div>
-                <p className="text-sm text-slate-500 font-medium">Disponíveis</p>
+                <p className="text-slate-500 text-sm">Disponíveis</p>
                 <p className="text-2xl font-bold text-slate-800">{data.resumo.equipamentosDisponiveis}</p>
               </div>
             </div>
+
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="p-3 bg-orange-100 text-orange-600 rounded-lg"><TrendingUp size={24} /></div>
+              <div className="p-3 bg-orange-50 text-orange-500 rounded-lg">
+                <TrendingUp size={24} />
+              </div>
               <div>
-                <p className="text-sm text-slate-500 font-medium">Emprestados</p>
+                <p className="text-slate-500 text-sm">Emprestados</p>
                 <p className="text-2xl font-bold text-slate-800">{data.resumo.equipamentosEmprestados}</p>
               </div>
             </div>
+
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="p-3 bg-red-100 text-red-600 rounded-lg"><AlertTriangle size={24} /></div>
-              <div>
-                <p className="text-sm text-slate-500 font-medium">Com Defeito</p>
-                <p className="text-2xl font-bold text-slate-800">{data.resumo.equipamentosComDefeito}</p>
+              <div className="p-3 bg-red-50 text-red-500 rounded-lg">
+                <AlertTriangle size={24} />
               </div>
-            </div>
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="p-3 bg-slate-100 text-slate-600 rounded-lg"><FileText size={24} /></div>
               <div>
-                <p className="text-sm text-slate-500 font-medium">Baixados</p>
-                <p className="text-2xl font-bold text-slate-800">{data.resumo.equipamentosBaixados || 0}</p>
+                <p className="text-slate-500 text-sm">Manutenção / Defeito</p>
+                <p className="text-2xl font-bold text-slate-800">{data.resumo.equipamentosComDefeito}</p>
               </div>
             </div>
           </div>
@@ -316,19 +309,21 @@ export default function AdminRelatorios() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
               <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <AlertTriangle size={20} className="text-red-500" /> Últimas Avarias
+                <AlertTriangle size={20} className="text-red-500" /> Avarias Recentes
               </h3>
               <div className="space-y-4">
                 {data.historicoAvarias.length === 0 ? (
-                  <p className="text-slate-500 text-sm">Nenhuma avaria recente.</p>
+                  <p className="text-slate-500 text-sm">Nenhuma avaria registrada.</p>
                 ) : (
                   data.historicoAvarias.slice(0, 5).map(avaria => (
-                    <div key={avaria.id} className="p-3 border border-slate-100 rounded-lg text-sm">
-                      <div className="flex justify-between font-medium text-slate-800">
-                        <span>{avaria.equipamento?.nome}</span>
-                        <span className="text-slate-500 text-xs">{new Date(avaria.dataRegistro).toLocaleDateString()}</span>
+                    <div key={avaria.id} className="p-3 border border-slate-100 rounded-lg flex items-center justify-between text-sm">
+                      <div>
+                        <p className="font-medium text-slate-800">{avaria.equipamento?.nome}</p>
+                        <p className="text-slate-500 text-xs">{avaria.descricao}</p>
                       </div>
-                      <p className="text-slate-600 mt-1">{avaria.descricao}</p>
+                      <span className="text-slate-400 text-xs">
+                        {new Date(avaria.dataRegistro).toLocaleDateString()}
+                      </span>
                     </div>
                   ))
                 )}
@@ -364,6 +359,130 @@ export default function AdminRelatorios() {
         </div>
       )}
 
+      {/* ABA: SOLICITANTES & AVULSOS */}
+      {activeTab === 'solicitantes' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setFiltroSolicitantes('TODOS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroSolicitantes === 'TODOS' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Todos ({(data.solicitantes || []).length})
+              </button>
+              <button
+                onClick={() => setFiltroSolicitantes('AVULSOS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroSolicitantes === 'AVULSOS' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Avulsos ({(data.solicitantes || []).filter(s => s.isAvulso).length})
+              </button>
+              <button
+                onClick={() => setFiltroSolicitantes('SISTEMA')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroSolicitantes === 'SISTEMA' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Com Login ({(data.solicitantes || []).filter(s => !s.isAvulso).length})
+              </button>
+            </div>
+
+            <div className="relative flex-1 max-w-sm">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Pesquisar por nome, setor ou whatsapp..."
+                value={buscaSolicitante}
+                onChange={e => setBuscaSolicitante(e.target.value)}
+                className="w-full pl-9 pr-4 py-1.5 rounded-lg border border-slate-200 text-sm focus:border-emerald-500 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600 text-xs uppercase border-b border-slate-200">
+                    <th className="p-4 font-semibold">Solicitante</th>
+                    <th className="p-4 font-semibold">Departamento</th>
+                    <th className="p-4 font-semibold">Contato / WhatsApp</th>
+                    <th className="p-4 font-semibold">Tipo</th>
+                    <th className="p-4 font-semibold text-center">Requisições</th>
+                    <th className="p-4 font-semibold text-center">Total Itens</th>
+                    <th className="p-4 font-semibold text-center">Em Posse Atual</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {solicitantesFiltrados.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-500">
+                        Nenhum solicitante encontrado.
+                      </td>
+                    </tr>
+                  ) : (
+                    solicitantesFiltrados.map((s) => (
+                      <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4">
+                          <div className="flex items-center gap-3">
+                            {s.fotoPerfilUrl ? (
+                              <img
+                                src={s.fotoPerfilUrl}
+                                alt={s.nome}
+                                className="w-9 h-9 rounded-full object-cover shrink-0 border border-slate-200"
+                                onError={(e) => { (e.target as any).style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div
+                                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                                style={{ backgroundColor: s.corPersonalizada || (s.isAvulso ? '#fef3c7' : '#e0e7ff'), color: s.corPersonalizada ? '#fff' : (s.isAvulso ? '#d97706' : '#4f46e5') }}
+                              >
+                                {s.nome?.substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <span className="font-semibold text-slate-800">{s.nome}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-slate-600">{s.departamento}</td>
+                        <td className="p-4 text-slate-600">
+                          {s.whatsapp ? (
+                            <span className="flex items-center gap-1 text-slate-700">
+                              <Phone size={13} className="text-emerald-500" /> {s.whatsapp}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-4">
+                          {s.isAvulso ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                              Avulso
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                              {s.role}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-center font-semibold text-slate-700">{s.totalRequisicoes}</td>
+                        <td className="p-4 text-center font-semibold text-slate-700">{s.totalItensEmprestados}</td>
+                        <td className="p-4 text-center">
+                          {s.itensAtivos > 0 ? (
+                            <span className="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-full font-bold text-xs">
+                              {s.itensAtivos} item(ns)
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Nenhum</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ABA: ITENS EMPRESTADOS */}
       {activeTab === 'emprestados' && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-300">
           <div className="overflow-x-auto">
@@ -406,6 +525,7 @@ export default function AdminRelatorios() {
         </div>
       )}
 
+      {/* ABA: AVARIAS */}
       {activeTab === 'avarias' && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-300">
           <div className="overflow-x-auto">
@@ -415,35 +535,34 @@ export default function AdminRelatorios() {
                   <th className="p-4 font-medium">Equipamento</th>
                   <th className="p-4 font-medium">Patrimônio</th>
                   <th className="p-4 font-medium">Status Atual</th>
-                  <th className="p-4 font-medium">Motivo / Última Avaria</th>
+                  <th className="p-4 font-medium">Avaria / Motivo</th>
                   <th className="p-4 font-medium text-center">Vezes na Manutenção</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {data.equipamentos.filter(e => e.statusCondicao === 'COM_DEFEITO' || e.recebeuComDefeito || (e.historicoAvarias && e.historicoAvarias.some((a: any) => !a.resolvido))).length === 0 ? (
+                {data.equipamentos.filter(e => e.statusCondicao === 'COM_DEFEITO' || e.statusCondicao === 'EM_MANUTENCAO' || (e.historicoAvarias && e.historicoAvarias.some((h: any) => !h.resolvido))).length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="p-8 text-center text-slate-500">Nenhum equipamento com avaria registrado.</td>
+                    <td colSpan={5} className="p-8 text-center text-slate-500">Nenhum equipamento em manutenção ou com avaria.</td>
                   </tr>
                 ) : (
-                  data.equipamentos.filter(e => e.statusCondicao === 'COM_DEFEITO' || e.recebeuComDefeito || (e.historicoAvarias && e.historicoAvarias.some((a: any) => !a.resolvido))).map(eq => {
-                    const avariaAtiva = eq.historicoAvarias?.find((a: any) => !a.resolvido);
-                    let motivo = 'Sinalizado com defeito';
-                    if (avariaAtiva) motivo = avariaAtiva.descricao;
-                    else if (eq.recebeuComDefeito) motivo = 'Recebido com defeito';
-                    
+                  data.equipamentos.filter(e => e.statusCondicao === 'COM_DEFEITO' || e.statusCondicao === 'EM_MANUTENCAO' || (e.historicoAvarias && e.historicoAvarias.some((h: any) => !h.resolvido))).map(eq => {
+                    const ultimasAvarias = eq.historicoAvarias || [];
+                    const avariaAberta = ultimasAvarias.find((h: any) => !h.resolvido);
+                    const motivo = avariaAberta ? avariaAberta.descricao : (ultimasAvarias[0]?.descricao || 'Defeito / Manutenção Preventiva');
+
                     return (
                       <tr key={eq.id} className="hover:bg-slate-50 transition-colors text-sm">
                         <td className="p-4 font-medium text-slate-800">{eq.nome}</td>
                         <td className="p-4 text-slate-600">{eq.codigoPatrimonio}</td>
                         <td className="p-4">
-                          <span className="px-2 py-1 bg-red-50 text-red-700 rounded-md font-medium text-xs uppercase tracking-wider">
-                            {eq.statusCondicao.replace('_', ' ')}
+                          <span className="px-2.5 py-1 bg-red-100 text-red-800 rounded-full font-medium text-xs">
+                            {eq.statusCondicao === 'EM_MANUTENCAO' ? 'Em Manutenção' : 'Com Defeito'}
                           </span>
                         </td>
-                        <td className="p-4 text-slate-600 max-w-md truncate" title={motivo}>{motivo}</td>
+                        <td className="p-4 text-slate-600 font-medium text-red-600">{motivo}</td>
                         <td className="p-4 text-center">
-                          <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full font-medium text-xs">
-                            {eq.historicoAvarias?.length || 0} vezes
+                          <span className="px-3 py-1 bg-red-50 text-red-700 rounded-full font-medium text-xs">
+                            {ultimasAvarias.length} vez(es)
                           </span>
                         </td>
                       </tr>
@@ -456,6 +575,7 @@ export default function AdminRelatorios() {
         </div>
       )}
 
+      {/* ABA: RANKING */}
       {activeTab === 'ranking' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
           {(!data.rankingUsuarios || data.rankingUsuarios.length === 0) ? (

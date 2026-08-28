@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, Alert, ActivityIndicator, SafeAreaView,
-  KeyboardAvoidingView, Platform, ScrollView, Modal
+  KeyboardAvoidingView, Platform, ScrollView, Modal, StatusBar
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { db } from "../db/database";
@@ -16,22 +16,22 @@ export default function CadastrarAvariaScreen({ navigation }) {
   const [equipamentos, setEquipamentos] = useState([]);
   const [tiposAvaria, setTiposAvaria] = useState([]);
   const [historicoAvarias, setHistoricoAvarias] = useState([]);
-  const [activeTab, setActiveTab] = useState("HISTORICO"); // 'HISTORICO' | 'TIPOS'
 
   // Modais de Criação
-  const [showModalTipo, setShowModalTipo] = useState(false);
-  const [showModalAvaria, setShowModalAvaria] = useState(false);
-  const [showModalEscolherEquip, setShowModalEscolherEquip] = useState(false);
-  const [showModalEscolherTipo, setShowModalEscolherTipo] = useState(false);
+  const [showModalNovoTipo, setShowModalNovoTipo] = useState(false);
+  const [showModalNovaAvaria, setShowModalNovaAvaria] = useState(false);
+  const [showModalEquip, setShowModalEquip] = useState(false);
+  const [showModalTipoSelect, setShowModalTipoSelect] = useState(false);
 
   // Form Registro Avaria
   const [equipamentoSelecionado, setEquipamentoSelecionado] = useState(null);
   const [tipoAvariaSelecionado, setTipoAvariaSelecionado] = useState(null);
   const [descricaoAvaria, setDescricaoAvaria] = useState("");
+  const [searchEquip, setSearchEquip] = useState("");
 
   // Form Novo Tipo de Avaria
   const [nomeTipo, setNomeTipo] = useState("");
-  const [descricaoTipo, setDescricaoTipo] = useState("");
+  const [descTipo, setDescTipo] = useState("");
 
   const [saving, setSaving] = useState(false);
 
@@ -102,8 +102,8 @@ export default function CadastrarAvariaScreen({ navigation }) {
       const dataRegistro = new Date().toISOString();
 
       db.runSync(
-        `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro)
-         VALUES (?, ?, ?, ?, ?, 0, ?)`,
+        `INSERT INTO HistoricoAvaria (id, equipamentoId, requisicaoId, tipoAvariaId, descricao, resolvido, dataRegistro, synced)
+         VALUES (?, ?, ?, ?, ?, 0, ?, 0)`,
         [id, equipamentoSelecionado.id, null, tipoAvariaSelecionado ? tipoAvariaSelecionado.id : null, descricaoAvaria.trim(), dataRegistro]
       );
 
@@ -151,7 +151,7 @@ export default function CadastrarAvariaScreen({ navigation }) {
           onPress: async () => {
             try {
               const dataResolucao = new Date().toISOString();
-              db.runSync("UPDATE HistoricoAvaria SET resolvido = 1, dataResolucao = ? WHERE id = ?", [dataResolucao, item.id]);
+              db.runSync("UPDATE HistoricoAvaria SET resolvido = 1, dataResolucao = ?, synced = 0 WHERE id = ?", [dataResolucao, item.id]);
 
               // Se não houver outras avarias ativas no mesmo equipamento, retorna para DISPONIVEL
               const pendentes = db.getAllSync(
@@ -184,12 +184,13 @@ export default function CadastrarAvariaScreen({ navigation }) {
   };
 
   const filteredEquipamentos = equipamentos.filter(eq =>
-    eq.nome.toLowerCase().includes(searchEquip.toLowerCase()) ||
-    eq.codigoPatrimonio.toLowerCase().includes(searchEquip.toLowerCase())
+    (eq.nome || "").toLowerCase().includes(searchEquip.toLowerCase()) ||
+    (eq.codigoPatrimonio || "").toLowerCase().includes(searchEquip.toLowerCase())
   );
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <View style={styles.headerRow}>
         <TouchableOpacity
           style={[styles.mainActionBtn, { backgroundColor: "#dc2626", flex: 1, marginRight: 8 }]}
@@ -369,8 +370,8 @@ export default function CadastrarAvariaScreen({ navigation }) {
       {/* MODAL SELEÇÃO DE EQUIPAMENTO */}
       <Modal visible={showModalEquip} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
+          <View style={[styles.modalSheet, { maxHeight: "85%" }]}>
+            <View style={[styles.modalHeader, { paddingHorizontal: 20, paddingTop: 18 }]}>
               <Text style={styles.modalTitle}>Selecionar Equipamento</Text>
               <TouchableOpacity onPress={() => setShowModalEquip(false)}>
                 <X size={22} color="#64748b" />
@@ -389,7 +390,7 @@ export default function CadastrarAvariaScreen({ navigation }) {
             <FlatList
               data={filteredEquipamentos}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingHorizontal: 16 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 20 }}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.modalItem}
@@ -405,6 +406,9 @@ export default function CadastrarAvariaScreen({ navigation }) {
                   </View>
                 </TouchableOpacity>
               )}
+              ListEmptyComponent={() => (
+                <Text style={styles.emptyText}>Nenhum equipamento encontrado.</Text>
+              )}
             />
           </View>
         </View>
@@ -413,8 +417,8 @@ export default function CadastrarAvariaScreen({ navigation }) {
       {/* MODAL SELEÇÃO TIPO DE AVARIA */}
       <Modal visible={showModalTipoSelect} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
+          <View style={[styles.modalSheet, { maxHeight: "80%" }]}>
+            <View style={[styles.modalHeader, { paddingHorizontal: 20, paddingTop: 18 }]}>
               <Text style={styles.modalTitle}>Tipo de Defeito</Text>
               <TouchableOpacity onPress={() => setShowModalTipoSelect(false)}>
                 <X size={22} color="#64748b" />
@@ -423,7 +427,7 @@ export default function CadastrarAvariaScreen({ navigation }) {
             <FlatList
               data={tiposAvaria}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ padding: 16 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 20 }}
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.modalItem}
@@ -450,7 +454,11 @@ export default function CadastrarAvariaScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8fafc" },
+  container: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 24) : 0
+  },
   headerRow: { flexDirection: "row", padding: 16, paddingBottom: 8 },
   mainActionBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",

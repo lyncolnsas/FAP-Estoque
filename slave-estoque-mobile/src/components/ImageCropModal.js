@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity,
-  Image, Dimensions, ActivityIndicator, SafeAreaView, PanResponder
+  Image, Dimensions, ActivityIndicator, SafeAreaView,
+  PanResponder, StatusBar, Platform
 } from "react-native";
 import * as ImageManipulator from "expo-image-manipulator";
 import {
-  X, Check, RotateCcw, RotateCw, RefreshCw, ZoomIn, ZoomOut, Maximize2
+  X, Check, RotateCcw, RotateCw, RefreshCw,
+  FlipHorizontal
 } from "lucide-react-native";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-const CROP_BOX_SIZE = Math.min(SCREEN_WIDTH - 48, 320);
-const SLIDER_WIDTH = SCREEN_WIDTH - 80;
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const CROP_BOX_SIZE = Math.min(SCREEN_WIDTH - 32, 330);
 
 export default function ImageCropModal({
   visible,
@@ -18,131 +19,287 @@ export default function ImageCropModal({
   onClose,
   onConfirm
 }) {
-  const [angle, setAngle] = useState(0); // -180 to 180
-  const [zoom, setZoom] = useState(1); // 1.0 to 3.0
+  // Transform states
+  const [scale, setScale] = useState(1);
+  const [translateX, setTranslateX] = useState(0);
+  const [translateY, setTranslateY] = useState(0);
+  const [angle, setAngle] = useState(0); // in degrees
+  const [isFlippedH, setIsFlippedH] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [imageDimensions, setImageDimensions] = useState({ width: 800, height: 800 });
 
-  const sliderTrackRef = useRef(null);
-  const [trackLayout, setTrackLayout] = useState({ x: 0, width: SLIDER_WIDTH });
+  // Refs for tracking active gestures
+  const transformRef = useRef({
+    scale: 1,
+    translateX: 0,
+    translateY: 0,
+    angle: 0,
+    isFlippedH: false,
+    initialDistance: 0,
+    initialAngle: 0,
+    initialScale: 1,
+    initialTouchAngle: 0,
+    startPanX: 0,
+    startPanY: 0,
+    lastTapTime: 0
+  });
 
+  // Sync ref with state
+  transformRef.current.scale = scale;
+  transformRef.current.translateX = translateX;
+  transformRef.current.translateY = translateY;
+  transformRef.current.angle = angle;
+  transformRef.current.isFlippedH = isFlippedH;
+
+  // Reset when opening modal with new image
   useEffect(() => {
-    if (visible) {
+    if (visible && imageUri) {
+      setScale(1);
+      setTranslateX(0);
+      setTranslateY(0);
       setAngle(0);
-      setZoom(1);
+      setIsFlippedH(false);
       setProcessing(false);
+
+      Image.getSize(
+        imageUri,
+        (w, h) => {
+          setImageDimensions({ width: w, height: h });
+        },
+        () => {
+          setImageDimensions({ width: 800, height: 800 });
+        }
+      );
     }
   }, [visible, imageUri]);
 
-  // PanResponder para o Slider de Rotação (-180° a +180°)
+  // Helper functions for 2-finger calculations
+  const getDistance = (t1, t2) => {
+    const dx = t1.pageX - t2.pageX;
+    const dy = t1.pageY - t2.pageY;
+    return Math.hypot(dx, dy);
+  };
+
+  const getTouchAngle = (t1, t2) => {
+    const dx = t2.pageX - t1.pageX;
+    const dy = t2.pageY - t1.pageY;
+    return Math.atan2(dy, dx) * (180 / Math.PI);
+  };
+
+  // Direct Gestures PanResponder (Pan, Pinch, Rotate, Double-Tap)
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
-        handleTouchSlider(evt.nativeEvent.locationX);
+        const touches = evt.nativeEvent.touches;
+        const now = Date.now();
+
+        // Double tap detection (< 300ms)
+        if (touches.length === 1) {
+          if (now - transformRef.current.lastTapTime < 300) {
+            // Toggle between 1.0x and 2.0x zoom
+            if (transformRef.current.scale > 1.2) {
+              setScale(1);
+              setTranslateX(0);
+              setTranslateY(0);
+            } else {
+              setScale(2);
+            }
+            transformRef.current.lastTapTime = 0;
+            return;
+          }
+          transformRef.current.lastTapTime = now;
+        }
+
+        if (touches.length === 2) {
+          // Pinch & 2-finger rotation start
+          const dist = getDistance(touches[0], touches[1]);
+          const touchAngle = getTouchAngle(touches[0], touches[1]);
+          transformRef.current.initialDistance = dist;
+          transformRef.current.initialScale = transformRef.current.scale;
+          transformRef.current.initialTouchAngle = touchAngle;
+          transformRef.current.initialAngle = transformRef.current.angle;
+        } else if (touches.length === 1) {
+          // 1-finger pan start
+          transformRef.current.startPanX = transformRef.current.translateX;
+          transformRef.current.startPanY = transformRef.current.translateY;
+        }
       },
       onPanResponderMove: (evt, gestureState) => {
-        handleMoveSlider(gestureState.dx);
+        const touches = evt.nativeEvent.touches;
+
+        if (touches.length === 2) {
+          // 2 FINGERS: Pinch Zoom & Rotation
+          const currentDist = getDistance(touches[0], touches[1]);
+          if (transformRef.current.initialDistance > 0) {
+            const factor = currentDist / transformRef.current.initialDistance;
+            const newScale = Math.max(1, Math.min(4.0, parseFloat((transformRef.current.initialScale * factor).toFixed(2))));
+            setScale(newScale);
+          }
+
+          const currentTouchAngle = getTouchAngle(touches[0], touches[1]);
+          const angleDelta = Math.round(currentTouchAngle - transformRef.current.initialTouchAngle);
+          let newAngle = (transformRef.current.initialAngle + angleDelta) % 360;
+          if (newAngle > 180) newAngle -= 360;
+          if (newAngle < -180) newAngle += 360;
+          setAngle(newAngle);
+        } else if (touches.length === 1) {
+          // 1 FINGER: Drag / Pan across image
+          const newX = transformRef.current.startPanX + gestureState.dx;
+          const newY = transformRef.current.startPanY + gestureState.dy;
+
+          // Limit bounds based on scale
+          const maxPan = (CROP_BOX_SIZE * (transformRef.current.scale - 0.9)) / 2 + 80;
+          const clampedX = Math.max(-maxPan, Math.min(maxPan, newX));
+          const clampedY = Math.max(-maxPan, Math.min(maxPan, newY));
+
+          setTranslateX(clampedX);
+          setTranslateY(clampedY);
+        }
       },
+      onPanResponderRelease: () => {
+        transformRef.current.initialDistance = 0;
+      },
+      onPanResponderTerminate: () => {
+        transformRef.current.initialDistance = 0;
+      }
     })
   ).current;
 
-  const currentAngleRef = useRef(0);
-  currentAngleRef.current = angle;
-
-  const handleTouchSlider = (touchX) => {
-    const width = trackLayout.width || SLIDER_WIDTH;
-    const clampedX = Math.max(0, Math.min(touchX, width));
-    const ratio = clampedX / width; // 0 to 1
-    const newAngle = Math.round((ratio - 0.5) * 360); // -180 to 180
-    setAngle(newAngle);
-  };
-
-  const handleMoveSlider = (dx) => {
-    const width = trackLayout.width || SLIDER_WIDTH;
-    const deltaDeg = Math.round((dx / width) * 360);
-    const newAngle = Math.max(-180, Math.min(180, currentAngleRef.current + deltaDeg));
-    setAngle(newAngle);
-  };
-
-  const adjustAngle = (delta) => {
+  // Quick Action Handlers
+  const rotateBy90 = (direction) => {
     setAngle((prev) => {
-      let next = prev + delta;
-      if (next > 180) next = 180;
-      if (next < -180) next = -180;
+      let next = prev + (direction === "cw" ? 90 : -90);
+      next = ((next + 180) % 360) - 180;
       return next;
     });
   };
 
-  const adjustZoom = (delta) => {
-    setZoom((prev) => {
-      const next = Math.max(1, Math.min(3, parseFloat((prev + delta).toFixed(2))));
-      return next;
-    });
+  const handleReset = () => {
+    setScale(1);
+    setTranslateX(0);
+    setTranslateY(0);
+    setAngle(0);
+    setIsFlippedH(false);
   };
 
   const handleConfirm = async () => {
     if (!imageUri) return;
     setProcessing(true);
+
     try {
       const actions = [];
+
+      // 1. Horizontal Flip
+      if (isFlippedH) {
+        actions.push({ flip: ImageManipulator.FlipType.Horizontal });
+      }
+
+      // 2. Rotation
       if (angle !== 0) {
         actions.push({ rotate: angle });
       }
+
+      // 3. Crop Calculation (Square 1:1 based on visible viewport center and scale)
+      const origW = imageDimensions.width || 800;
+      const origH = imageDimensions.height || 800;
+      const minDim = Math.min(origW, origH);
+      
+      // Target crop window inside original image
+      const cropSize = minDim / scale;
+      const normalizedOffsetX = (translateX / CROP_BOX_SIZE) * minDim;
+      const normalizedOffsetY = (translateY / CROP_BOX_SIZE) * minDim;
+
+      let originX = (origW - cropSize) / 2 - normalizedOffsetX;
+      let originY = (origH - cropSize) / 2 - normalizedOffsetY;
+
+      // Safe bounds clamping
+      originX = Math.max(0, Math.min(origW - cropSize, originX));
+      originY = Math.max(0, Math.min(origH - cropSize, originY));
+
+      if (cropSize > 20 && cropSize <= origW && cropSize <= origH) {
+        actions.push({
+          crop: {
+            originX: Math.round(originX),
+            originY: Math.round(originY),
+            width: Math.round(cropSize),
+            height: Math.round(cropSize)
+          }
+        });
+      }
+
+      // 4. Standard 800x800 output
       actions.push({ resize: { width: 800, height: 800 } });
 
       const result = await ImageManipulator.manipulateAsync(
         imageUri,
         actions,
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
       );
+
       onConfirm(result.uri);
       onClose();
     } catch (e) {
-      console.error("Erro ao cortar/rotacionar imagem:", e);
-      onConfirm(imageUri);
+      console.error("Erro ao aplicar manipulação de imagem:", e);
+      // Fallback sem crop estrito
+      try {
+        const fallback = await ImageManipulator.manipulateAsync(
+          imageUri,
+          [{ resize: { width: 800, height: 800 } }],
+          { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        onConfirm(fallback.uri);
+      } catch (err) {
+        onConfirm(imageUri);
+      }
       onClose();
     } finally {
       setProcessing(false);
     }
   };
 
-  // Posição do indicador no slider (-180° = 0%, 0° = 50%, +180° = 100%)
-  const thumbPercent = ((angle + 180) / 360) * 100;
-
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
+    <Modal visible={visible} animationType="slide" transparent={false} statusBarTranslucent={false}>
+      <StatusBar barStyle="light-content" backgroundColor="#07090e" />
       <SafeAreaView style={styles.container}>
-        {/* CABEÇALHO */}
+        {/* CABEÇALHO COM SAFE AREA */}
         <View style={styles.header}>
-          <TouchableOpacity style={styles.iconBtn} onPress={onClose} disabled={processing}>
-            <X size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={{ alignItems: "center" }}>
-            <Text style={styles.title}>Ajuste & Corte Quadrado</Text>
-            <Text style={styles.subtitle}>Gire livremente e redimensione antes de cortar</Text>
-          </View>
           <TouchableOpacity
-            style={styles.btnConfirmar}
+            style={styles.iconBtn}
+            onPress={onClose}
+            disabled={processing}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <X size={24} color="#94a3b8" />
+          </TouchableOpacity>
+
+          <View style={{ alignItems: "center" }}>
+            <Text style={styles.title}>Editor de Foto (1:1)</Text>
+            <Text style={styles.subtitle}>Arraste e ajuste com os dedos</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.btnConfirmar, processing && { opacity: 0.6 }]}
             onPress={handleConfirm}
             disabled={processing}
           >
             {processing ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Check size={18} color="#fff" style={{ marginRight: 4 }} />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                <Check size={18} color="#fff" />
                 <Text style={styles.btnConfirmarText}>Cortar</Text>
               </View>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* ÁREA DE CORTE QUADRADO 1:1 COM VISUALIZAÇÃO EM TEMPO REAL */}
+        {/* VIEWPORT INTERATIVO DE GESTOS (1 DEDO ARRASTA, 2 DEDOS ZOOM/ROTAÇÃO) */}
         <View style={styles.cropViewport}>
-          <View style={styles.cropFrame}>
+          <View style={styles.cropFrame} {...panResponder.panHandlers}>
             {imageUri ? (
               <Image
                 source={{ uri: imageUri }}
@@ -150,8 +307,11 @@ export default function ImageCropModal({
                   styles.imagePreview,
                   {
                     transform: [
+                      { translateX },
+                      { translateY },
+                      { scaleX: isFlippedH ? -1 : 1 },
                       { rotate: `${angle}deg` },
-                      { scale: zoom }
+                      { scale }
                     ]
                   }
                 ]}
@@ -159,137 +319,63 @@ export default function ImageCropModal({
               />
             ) : null}
 
-            {/* GRADE 3x3 */}
-            <View style={styles.gridOverlay} pointerEvents="none">
-              <View style={styles.gridRow}>
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-                <View style={styles.gridCell} />
-              </View>
-            </View>
-
-            {/* MARCADORES DE CANTO DE CORTE */}
+            {/* MARCADORES DE CANTO */}
             <View style={[styles.corner, styles.cornerTL]} pointerEvents="none" />
             <View style={[styles.corner, styles.cornerTR]} pointerEvents="none" />
             <View style={[styles.corner, styles.cornerBL]} pointerEvents="none" />
             <View style={[styles.corner, styles.cornerBR]} pointerEvents="none" />
           </View>
 
-          {/* INDICADORES EM TEMPO REAL */}
+          {/* STATUS EM TEMPO REAL */}
           <View style={styles.infoBadgeRow}>
             <View style={styles.infoBadge}>
               <Text style={styles.infoBadgeText}>
-                Rotação: {angle > 0 ? `+${angle}°` : `${angle}°`}
+                {angle > 0 ? `+${angle}°` : `${angle}°`}
               </Text>
             </View>
             <View style={styles.infoBadge}>
-              <Text style={styles.infoBadgeText}>Zoom: {zoom.toFixed(1)}x</Text>
+              <Text style={styles.infoBadgeText}>{scale.toFixed(1)}x Zoom</Text>
             </View>
+            {isFlippedH && (
+              <View style={[styles.infoBadge, { backgroundColor: "#1e1b4b", borderColor: "#4338ca" }]}>
+                <Text style={[styles.infoBadgeText, { color: "#a5b4fc" }]}>Espelhado</Text>
+              </View>
+            )}
+          </View>
+
+          {/* DICA DE GESTOS */}
+          <View style={styles.hintContainer}>
+            <Text style={styles.hintText}>
+              👆 <Text style={{ fontWeight: "700", color: "#38bdf8" }}>1 dedo:</Text> Arrastar • ✌️ <Text style={{ fontWeight: "700", color: "#38bdf8" }}>2 dedos:</Text> Zoom & Giro • ⚡ <Text style={{ fontWeight: "700", color: "#38bdf8" }}>2 toques:</Text> Zoom rápido
+            </Text>
           </View>
         </View>
 
-        {/* CONTROLES DE ROTAÇÃO E ZOOM */}
+        {/* BARRA DE AÇÕES RÁPIDAS */}
         <View style={styles.controlsContainer}>
-          {/* 1. SLIDER CENTRAL DE ROTAÇÃO GRADUAL (-180° a +180°) */}
-          <Text style={styles.controlSectionLabel}>Girar Imagem (-180° a +180°)</Text>
+          <View style={styles.quickActionsRow}>
+            <TouchableOpacity style={styles.quickActionBtn} onPress={() => rotateBy90("ccw")}>
+              <RotateCcw size={20} color="#38bdf8" />
+              <Text style={styles.quickActionText}>-90°</Text>
+            </TouchableOpacity>
 
-          <View style={styles.sliderWrapper}>
-            <Text style={styles.sliderLimitText}>-180°</Text>
+            <TouchableOpacity style={styles.quickActionBtn} onPress={() => rotateBy90("cw")}>
+              <RotateCw size={20} color="#38bdf8" />
+              <Text style={styles.quickActionText}>+90°</Text>
+            </TouchableOpacity>
 
-            <View
-              style={styles.sliderTrack}
-              onLayout={(e) => setTrackLayout(e.nativeEvent.layout)}
-              {...panResponder.panHandlers}
+            <TouchableOpacity
+              style={[styles.quickActionBtn, isFlippedH && styles.quickActionBtnActive]}
+              onPress={() => setIsFlippedH(!isFlippedH)}
             >
-              {/* Linha de centro 0° */}
-              <View style={styles.centerIndicator} />
-              {/* Barra ativa a partir do centro */}
-              {angle >= 0 ? (
-                <View
-                  style={[
-                    styles.activeTrackRight,
-                    { width: `${(angle / 360) * 100}%` }
-                  ]}
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.activeTrackLeft,
-                    { width: `${Math.abs(angle / 360) * 100}%` }
-                  ]}
-                />
-              )}
-              {/* Knob / Thumb do Slider */}
-              <View
-                style={[
-                  styles.sliderThumb,
-                  { left: `${Math.max(0, Math.min(96, thumbPercent))}%` }
-                ]}
-              >
-                <View style={styles.thumbCenterDot} />
-              </View>
-            </View>
-
-            <Text style={styles.sliderLimitText}>+180°</Text>
-          </View>
-
-          {/* BOTÕES DE AJUSTE FINO DE ROTAÇÃO */}
-          <View style={styles.buttonRow}>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(-90)}>
-              <RotateCcw size={13} color="#94a3b8" />
-              <Text style={styles.stepBtnText}>-90°</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(-15)}>
-              <Text style={styles.stepBtnText}>-15°</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(-1)}>
-              <Text style={styles.stepBtnText}>-1°</Text>
+              <FlipHorizontal size={20} color={isFlippedH ? "#38bdf8" : "#94a3b8"} />
+              <Text style={[styles.quickActionText, isFlippedH && { color: "#38bdf8" }]}>Espelhar</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.resetBtn} onPress={() => setAngle(0)}>
-              <RefreshCw size={12} color="#fff" style={{ marginRight: 3 }} />
-              <Text style={styles.resetBtnText}>0°</Text>
+            <TouchableOpacity style={[styles.quickActionBtn, styles.quickActionBtnReset]} onPress={handleReset}>
+              <RefreshCw size={18} color="#f87171" />
+              <Text style={[styles.quickActionText, { color: "#f87171" }]}>Reset</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(1)}>
-              <Text style={styles.stepBtnText}>+1°</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(15)}>
-              <Text style={styles.stepBtnText}>+15°</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => adjustAngle(90)}>
-              <RotateCw size={13} color="#94a3b8" />
-              <Text style={styles.stepBtnText}>+90°</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 2. REDIMENSIONAMENTO / ZOOM */}
-          <View style={styles.zoomRow}>
-            <Text style={styles.controlSectionLabel}>Redimensionar / Zoom</Text>
-            <View style={styles.zoomBtnGroup}>
-              <TouchableOpacity style={styles.zoomBtn} onPress={() => adjustZoom(-0.1)}>
-                <ZoomOut size={16} color="#94a3b8" />
-                <Text style={styles.zoomBtnText}>-</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.zoomResetBtn} onPress={() => setZoom(1)}>
-                <Maximize2 size={13} color="#38bdf8" style={{ marginRight: 4 }} />
-                <Text style={styles.zoomResetBtnText}>1.0x</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.zoomBtn} onPress={() => adjustZoom(0.1)}>
-                <ZoomIn size={16} color="#94a3b8" />
-                <Text style={styles.zoomBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </View>
       </SafeAreaView>
@@ -298,119 +384,240 @@ export default function ImageCropModal({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0f19" },
+  container: {
+    flex: 1,
+    backgroundColor: "#07090e",
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 6 : 8,
+  },
   header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#1e293b",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#171f2e",
   },
-  iconBtn: { padding: 6 },
-  title: { fontSize: 16, fontWeight: "700", color: "#ffffff" },
-  subtitle: { fontSize: 11, color: "#64748b", marginTop: 2 },
-  btnConfirmar: {
-    backgroundColor: "#2563eb", paddingHorizontal: 16, paddingVertical: 8,
+  iconBtn: {
+    padding: 6,
     borderRadius: 8,
+    backgroundColor: "#111827",
   },
-  btnConfirmarText: { color: "#ffffff", fontWeight: "700", fontSize: 13 },
+  title: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#f8fafc",
+  },
+  subtitle: {
+    fontSize: 11,
+    color: "#64748b",
+    marginTop: 1,
+  },
+  btnConfirmar: {
+    backgroundColor: "#2563eb",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    elevation: 3,
+  },
+  btnConfirmarText: {
+    color: "#ffffff",
+    fontWeight: "700",
+    fontSize: 13,
+  },
   cropViewport: {
-    flex: 1, alignItems: "center", justifyContent: "center", padding: 16,
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 12,
   },
   cropFrame: {
-    width: CROP_BOX_SIZE, height: CROP_BOX_SIZE,
-    backgroundColor: "#020617", borderRadius: 14, overflow: "hidden",
-    borderWidth: 2, borderColor: "#38bdf8", position: "relative",
+    width: CROP_BOX_SIZE,
+    height: CROP_BOX_SIZE,
+    backgroundColor: "#000000",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "#38bdf8",
+    position: "relative",
   },
-  imagePreview: { width: "100%", height: "100%" },
-  gridOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    flexDirection: "column",
-  },
-  gridRow: { flex: 1, flexDirection: "row" },
-  gridCell: {
-    flex: 1, borderWidth: 0.5, borderColor: "rgba(255,255,255,0.12)",
+  imagePreview: {
+    width: "100%",
+    height: "100%",
   },
   corner: {
-    position: "absolute", width: 18, height: 18,
+    position: "absolute",
+    width: 20,
+    height: 20,
     borderColor: "#38bdf8",
   },
-  cornerTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
-  cornerTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
-  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
-  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
-  infoBadgeRow: { flexDirection: "row", gap: 10, marginTop: 12 },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 14 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 14 },
+  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 14 },
+  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 14 },
+  infoBadgeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 14,
+  },
   infoBadge: {
-    backgroundColor: "#1e293b", paddingHorizontal: 12, paddingVertical: 5,
-    borderRadius: 12, borderWidth: 1, borderColor: "#334155",
+    backgroundColor: "#0f172a",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
   },
-  infoBadgeText: { color: "#cbd5e1", fontSize: 12, fontWeight: "700" },
+  infoBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#38bdf8",
+  },
+  hintContainer: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+  },
+  hintText: {
+    fontSize: 11,
+    color: "#94a3b8",
+    textAlign: "center",
+    lineHeight: 16,
+  },
   controlsContainer: {
-    backgroundColor: "#111827", padding: 16, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    borderTopWidth: 1, borderTopColor: "#1f2937",
+    backgroundColor: "#0b0f19",
+    borderTopWidth: 1,
+    borderTopColor: "#171f2e",
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 16,
   },
-  controlSectionLabel: {
-    fontSize: 12, fontWeight: "700", color: "#94a3b8", textAlign: "center", marginBottom: 8,
+  quickActionsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
   },
-  sliderWrapper: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    marginBottom: 12, paddingHorizontal: 4,
+  quickActionBtn: {
+    flex: 1,
+    backgroundColor: "#1e293b",
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: "#334155",
   },
-  sliderLimitText: { color: "#64748b", fontSize: 11, fontWeight: "600", width: 36, textAlign: "center" },
+  quickActionBtnActive: {
+    borderColor: "#38bdf8",
+    backgroundColor: "#082f49",
+  },
+  quickActionBtnReset: {
+    backgroundColor: "#2a1215",
+    borderColor: "#451a1a",
+  },
+  quickActionText: {
+    color: "#e2e8f0",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  tabsRow: {
+    flexDirection: "row",
+    backgroundColor: "#1e293b",
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 10,
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+  },
+  tabBtnActive: {
+    backgroundColor: "#2563eb",
+  },
+  tabBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#94a3b8",
+  },
+  tabBtnTextActive: {
+    color: "#ffffff",
+    fontWeight: "700",
+  },
+  tabContent: {
+    marginTop: 4,
+  },
+  sliderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  sliderLabelSide: {
+    color: "#64748b",
+    fontSize: 11,
+    fontWeight: "700",
+    width: 32,
+    textAlign: "center",
+  },
   sliderTrack: {
-    flex: 1, height: 28, backgroundColor: "#1f2937",
-    borderRadius: 14, position: "relative", justifyContent: "center",
-    marginHorizontal: 8, overflow: "hidden",
+    flex: 1,
+    height: 28,
+    backgroundColor: "#1e293b",
+    borderRadius: 14,
+    position: "relative",
+    justifyContent: "center",
+    marginHorizontal: 8,
+    borderWidth: 1,
+    borderColor: "#334155",
   },
   centerIndicator: {
-    position: "absolute", left: "50%", width: 2, height: "100%",
-    backgroundColor: "rgba(255,255,255,0.3)", zIndex: 1,
-  },
-  activeTrackRight: {
-    position: "absolute", left: "50%", height: "100%",
-    backgroundColor: "rgba(56, 189, 248, 0.25)",
-  },
-  activeTrackLeft: {
-    position: "absolute", right: "50%", height: "100%",
-    backgroundColor: "rgba(56, 189, 248, 0.25)",
+    position: "absolute",
+    left: "50%",
+    width: 2,
+    height: "100%",
+    backgroundColor: "rgba(255,255,255,0.25)",
   },
   sliderThumb: {
-    position: "absolute", width: 22, height: 22,
-    borderRadius: 11, backgroundColor: "#38bdf8",
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5, shadowRadius: 3, elevation: 4,
-    zIndex: 2,
+    position: "absolute",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#38bdf8",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 3,
+    elevation: 4,
+    top: 1,
   },
-  thumbCenterDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#0f172a" },
-  buttonRow: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    gap: 4, marginBottom: 14,
+  thumbDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#0f172a",
+  },
+  stepButtonsRow: {
+    flexDirection: "row",
+    gap: 6,
   },
   stepBtn: {
-    flex: 1, backgroundColor: "#1f2937", paddingVertical: 8,
-    borderRadius: 8, alignItems: "center", justifyContent: "center",
-    flexDirection: "row", gap: 2,
+    flex: 1,
+    backgroundColor: "#1e293b",
+    paddingVertical: 9,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#334155",
   },
-  stepBtnText: { color: "#e2e8f0", fontSize: 11, fontWeight: "600" },
-  resetBtn: {
-    backgroundColor: "#ef4444", paddingHorizontal: 10, paddingVertical: 8,
-    borderRadius: 8, alignItems: "center", justifyContent: "center",
-    flexDirection: "row",
+  stepBtnText: {
+    color: "#cbd5e1",
+    fontSize: 12,
+    fontWeight: "600",
   },
-  resetBtnText: { color: "#fff", fontSize: 11, fontWeight: "700" },
-  zoomRow: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingTop: 6, borderTopWidth: 1, borderTopColor: "#1f2937",
-  },
-  zoomBtnGroup: { flexDirection: "row", gap: 8 },
-  zoomBtn: {
-    backgroundColor: "#1f2937", width: 44, height: 34,
-    borderRadius: 8, alignItems: "center", justifyContent: "center",
-    flexDirection: "row", gap: 3,
-  },
-  zoomBtnText: { color: "#e2e8f0", fontSize: 13, fontWeight: "700" },
-  zoomResetBtn: {
-    backgroundColor: "#1e293b", paddingHorizontal: 12, height: 34,
-    borderRadius: 8, alignItems: "center", justifyContent: "center",
-    flexDirection: "row", borderWidth: 1, borderColor: "#334155",
-  },
-  zoomResetBtnText: { color: "#38bdf8", fontSize: 12, fontWeight: "700" },
 });

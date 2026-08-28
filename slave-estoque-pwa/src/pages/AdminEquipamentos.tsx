@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import imageCompression from 'browser-image-compression';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, ShieldAlert, Image as ImageIcon, QrCode, Printer, X, Edit2, CheckCircle2, Trash2, LayoutGrid, List, Maximize2 } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { Plus, ShieldAlert, Image as ImageIcon, QrCode, Printer, X, Edit2, CheckCircle2, Trash2, LayoutGrid, List, Maximize2, FileText, CheckSquare, Square } from 'lucide-react';
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import jsPDF from 'jspdf';
 import AdminAvarias from './AdminAvarias';
 import { api } from '../lib/api';
 import { toast } from 'sonner';
@@ -31,6 +32,7 @@ export default function AdminEquipamentos() {
   
   const [selecionados, setSelecionados] = useState<string[]>([]);
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   
   const [tiposAvaria, setTiposAvaria] = useState<any[]>([]);
   const [filtroAvaria, setFiltroAvaria] = useState<string>('');
@@ -74,15 +76,30 @@ export default function AdminEquipamentos() {
     }
   }, [token]);
 
+  const equipamentosFiltrados = equipamentos.filter(eq => {
+    if (filtroCategoria && eq.categoriaId !== filtroCategoria) return false;
+    if (filtroTipo && eq.tipoId !== filtroTipo) return false;
+    if (filtroAvaria) {
+      if (filtroAvaria === 'COM_DEFEITO') return eq.statusCondicao === 'COM_DEFEITO';
+      return eq.historicoAvarias?.some((h: any) => h.tipoAvariaId === filtroAvaria && !h.resolvido);
+    }
+    return true;
+  });
+
+  const allFilteredSelected = equipamentosFiltrados.length > 0 && equipamentosFiltrados.every(e => selecionados.includes(e.id));
+
   const toggleSelect = (id: string) => {
     setSelecionados(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
   const selectAll = () => {
-    if (selecionados.length === equipamentos.length) {
-      setSelecionados([]);
+    if (allFilteredSelected) {
+      const filteredIds = new Set(equipamentosFiltrados.map(e => e.id));
+      setSelecionados(prev => prev.filter(id => !filteredIds.has(id)));
     } else {
-      setSelecionados(equipamentos.map(e => e.id));
+      const currentSelected = new Set(selecionados);
+      equipamentosFiltrados.forEach(e => currentSelected.add(e.id));
+      setSelecionados(Array.from(currentSelected));
     }
   };
 
@@ -209,15 +226,83 @@ export default function AdminEquipamentos() {
     window.print();
   };
 
-  const equipamentosFiltrados = equipamentos.filter(eq => {
-    if (filtroCategoria && eq.categoriaId !== filtroCategoria) return false;
-    if (filtroTipo && eq.tipoId !== filtroTipo) return false;
-    if (filtroAvaria) {
-      if (filtroAvaria === 'COM_DEFEITO') return eq.statusCondicao === 'COM_DEFEITO';
-      return eq.historicoAvarias?.some((h: any) => h.tipoAvariaId === filtroAvaria && !h.resolvido);
+  const handleExportPDF = () => {
+    const selectedItems = equipamentos.filter(eq => selecionados.includes(eq.id));
+    if (selectedItems.length === 0) {
+      toast.error('Nenhum equipamento selecionado.');
+      return;
     }
-    return true;
-  });
+
+    setIsGeneratingPdf(true);
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = 210;
+      const pageHeight = 297;
+      
+      const cols = 4;
+      const rows = 6;
+      const marginX = 8;
+      const marginY = 10;
+      const labelWidth = (pageWidth - (marginX * 2)) / cols; // ~48.5 mm
+      const labelHeight = (pageHeight - (marginY * 2)) / rows; // ~46.16 mm
+
+      let indexOnPage = 0;
+
+      for (let i = 0; i < selectedItems.length; i++) {
+        const eq = selectedItems[i];
+
+        if (indexOnPage === cols * rows) {
+          doc.addPage();
+          indexOnPage = 0;
+        }
+
+        const col = indexOnPage % cols;
+        const row = Math.floor(indexOnPage / cols);
+        const x = marginX + (col * labelWidth);
+        const y = marginY + (row * labelHeight);
+
+        // Borda suave de corte da etiqueta
+        doc.setDrawColor(200, 205, 215);
+        doc.setLineDashPattern([1.5, 1.5], 0);
+        doc.roundedRect(x + 1, y + 1, labelWidth - 2, labelHeight - 2, 2, 2);
+        doc.setLineDashPattern([], 0);
+
+        // Pega o canvas gerado pelo QRCodeCanvas
+        const canvas = document.getElementById(`qr-canvas-${eq.id}`) as HTMLCanvasElement;
+        if (canvas) {
+          const qrDataUrl = canvas.toDataURL('image/png');
+          const qrSize = 24; // 24mm x 24mm
+          const qrX = x + (labelWidth - qrSize) / 2;
+          const qrY = y + 3.5;
+          doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+        }
+
+        // Código de Patrimônio
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(eq.codigoPatrimonio, x + (labelWidth / 2), y + 32, { align: 'center' });
+
+        // Nome do Equipamento
+        doc.setFontSize(6.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(71, 85, 105);
+        const maxTextWidth = labelWidth - 4;
+        const splitText = doc.splitTextToSize(eq.nome, maxTextWidth);
+        doc.text(splitText.slice(0, 2), x + (labelWidth / 2), y + 36, { align: 'center' });
+
+        indexOnPage++;
+      }
+
+      doc.save(`etiquetas-qrcodes-${new Date().toISOString().slice(0, 10)}.pdf`);
+      toast.success('PDF de etiquetas gerado com sucesso!');
+    } catch (err) {
+      console.error('Erro ao gerar PDF de etiquetas:', err);
+      toast.error('Erro ao gerar arquivo PDF');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
 
   if (user?.role !== 'ADMIN') {
     return (
@@ -459,21 +544,33 @@ export default function AdminEquipamentos() {
               </select>
             </div>
 
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
-              <button 
-                onClick={() => setViewMode('table')} 
-                className={`p-2 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
-                title="Visualização em Tabela"
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={selectAll}
+                className="text-xs font-medium px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors flex items-center gap-1.5"
+                title="Selecionar / Desmarcar todos os itens visíveis no filtro atual"
               >
-                <List size={20} />
+                {allFilteredSelected ? <CheckSquare size={15} className="text-blue-600" /> : <Square size={15} />}
+                <span>{allFilteredSelected ? 'Desmarcar Visíveis' : `Selecionar ${equipamentosFiltrados.length} Visíveis`}</span>
               </button>
-              <button 
-                onClick={() => setViewMode('grid')} 
-                className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
-                title="Visualização em Grade"
-              >
-                <LayoutGrid size={20} />
-              </button>
+
+              <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+                <button 
+                  onClick={() => setViewMode('table')} 
+                  className={`p-2 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                  title="Visualização em Tabela"
+                >
+                  <List size={20} />
+                </button>
+                <button 
+                  onClick={() => setViewMode('grid')} 
+                  className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                  title="Visualização em Grade"
+                >
+                  <LayoutGrid size={20} />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -484,7 +581,7 @@ export default function AdminEquipamentos() {
                   <thead className="hidden md:table-header-group bg-slate-50 text-xs uppercase text-slate-500 border-b border-slate-200">
                     <tr>
                       <th className="px-6 py-4">
-                        <input type="checkbox" className="rounded text-blue-600" onChange={selectAll} checked={selecionados.length === equipamentos.length && equipamentos.length > 0} />
+                        <input type="checkbox" className="rounded text-blue-600 cursor-pointer" onChange={selectAll} checked={allFilteredSelected} />
                       </th>
                       <th className="px-6 py-4">Equipamento</th>
                       <th className="px-6 py-4">Patrimônio</th>
@@ -626,10 +723,23 @@ export default function AdminEquipamentos() {
               <div className="bg-white sm:max-w-4xl sm:mx-auto sm:rounded-2xl sm:shadow-2xl print:shadow-none print:max-w-full">
                 
                 <div className="print:hidden flex justify-between items-center p-6 border-b border-slate-100">
-                  <h2 className="text-xl font-bold text-slate-800">Visualização de Etiquetas</h2>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-800">Visualização de Etiquetas</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">{selecionados.length} equipamento(s) selecionado(s) para impressão</p>
+                  </div>
                   <div className="flex items-center gap-3">
-                    <button onClick={handlePrint} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-medium transition-colors">
-                      <Printer size={16} /> Imprimir Agora
+                    <button 
+                      onClick={handleExportPDF} 
+                      disabled={isGeneratingPdf}
+                      className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-medium transition-colors shadow-sm"
+                    >
+                      <FileText size={16} /> {isGeneratingPdf ? 'Gerando PDF...' : 'Gerar PDF (A4)'}
+                    </button>
+                    <button 
+                      onClick={handlePrint} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-medium transition-colors"
+                    >
+                      <Printer size={16} /> Imprimir Tela
                     </button>
                     <button onClick={() => setShowPrintModal(false)} className="text-slate-400 hover:text-slate-600 p-2">
                       <X size={24} />
@@ -641,6 +751,16 @@ export default function AdminEquipamentos() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6 print:grid-cols-4 print:gap-4">
                     {equipamentos.filter(eq => selecionados.includes(eq.id)).map(eq => (
                       <div key={eq.id} className="border-2 border-dashed border-slate-300 rounded-xl p-4 flex flex-col items-center justify-center text-center print:break-inside-avoid print:border-solid print:border-black">
+                        {/* QRCodeCanvas oculto usado para conversão em imagem PNG nítida no PDF */}
+                        <div className="hidden">
+                          <QRCodeCanvas 
+                            id={`qr-canvas-${eq.id}`}
+                            value={`${window.location.origin}/equipamento/${eq.codigoPatrimonio}`}
+                            size={256}
+                            level="H"
+                            includeMargin={false}
+                          />
+                        </div>
                         <QRCodeSVG 
                           value={`${window.location.origin}/equipamento/${eq.codigoPatrimonio}`} 
                           size={120}

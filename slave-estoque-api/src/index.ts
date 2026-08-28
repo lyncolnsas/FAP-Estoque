@@ -179,10 +179,24 @@ app.put('/equipamentos/:id', authMiddleware, authRole(['ADMIN']), async (req: Au
     const { id } = req.params;
     const { nome, categoriaId, tipoId, codigoPatrimonio, statusCondicao, avariaId, permitirEmprestimo } = req.body;
 
-    const dataToUpdate: any = { nome, statusCondicao };
+    const dataToUpdate: any = { nome };
+    if (statusCondicao) dataToUpdate.statusCondicao = statusCondicao;
     if (categoriaId) dataToUpdate.categoriaId = categoriaId;
     if (tipoId) dataToUpdate.tipoId = tipoId;
     if (permitirEmprestimo !== undefined) dataToUpdate.permitirEmprestimo = permitirEmprestimo;
+
+    // Se está adicionando uma nova avaria e o status estava DISPONIVEL, ajusta para COM_DEFEITO
+    if (avariaId) {
+      if (!dataToUpdate.statusCondicao || dataToUpdate.statusCondicao === 'DISPONIVEL') {
+        dataToUpdate.statusCondicao = 'COM_DEFEITO';
+      }
+    } else if (dataToUpdate.statusCondicao === 'DISPONIVEL') {
+      // Se administrador marcou o equipamento como DISPONÍVEL e não adicionou nova avaria, resolve as avarias abertas
+      await prisma.historicoAvaria.updateMany({
+        where: { equipamentoId: id as string, resolvido: false },
+        data: { resolvido: true, dataResolucao: new Date() }
+      });
+    }
 
     if (codigoPatrimonio) {
       const eqExistente = await prisma.equipamento.findUnique({ where: { codigoPatrimonio } });
@@ -973,7 +987,15 @@ app.get('/equipamentos/:codigo/requisicao-ativa', authMiddleware, async (req, re
 app.get('/dashboard/metrics', authMiddleware, authRole(['ADMIN']), async (req, res) => {
   try {
     const totalEquipamentos = await prisma.equipamento.count();
-    const equipamentosComDefeito = await prisma.equipamento.count({ where: { statusCondicao: 'COM_DEFEITO' } });
+    const equipamentosComDefeito = await prisma.equipamento.count({ 
+      where: { 
+        OR: [
+          { statusCondicao: 'COM_DEFEITO' },
+          { statusCondicao: 'EM_MANUTENCAO' },
+          { historicoAvarias: { some: { resolvido: false } } }
+        ] 
+      } 
+    });
     const equipamentosEmprestados = await prisma.equipamento.count({ where: { statusCondicao: 'EMPRESTADO' } });
     const equipamentosDisponiveis = await prisma.equipamento.count({ where: { statusCondicao: 'DISPONIVEL' } });
 

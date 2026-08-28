@@ -261,9 +261,18 @@ export default function FormularioEquipamentos() {
 
           {targetUserId !== 'EXTERNAL' && (
             <div className="flex gap-4 items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
-              <div className="h-10 w-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">
-                {targetUserObj ? targetUserObj.nome.charAt(0).toUpperCase() : (user?.nome?.charAt(0) || '?')}
-              </div>
+              {targetUserObj?.fotoPerfilUrl ? (
+                <img
+                  src={targetUserObj.fotoPerfilUrl}
+                  alt={targetUserObj.nome}
+                  className="h-10 w-10 rounded-full object-cover border border-slate-200 shadow-sm"
+                  onError={(e) => { (e.target as any).style.display = 'none'; }}
+                />
+              ) : (
+                <div className="h-10 w-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">
+                  {targetUserObj ? targetUserObj.nome.charAt(0).toUpperCase() : (user?.nome?.charAt(0) || '?')}
+                </div>
+              )}
               <div>
                 <p className="text-slate-800 font-medium">{targetUserObj ? targetUserObj.nome : user?.nome} <span className="text-xs text-slate-500 ml-2 font-normal">({targetUserObj ? targetUserObj.departamento : user?.departamento})</span></p>
                 <p className="text-xs text-slate-500">{targetUserObj ? targetUserObj.email : user?.email}</p>

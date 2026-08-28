@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, Alert, ActivityIndicator, SafeAreaView,
-  Platform, ScrollView, Modal, Image
+  Platform, ScrollView, Modal, Image, StatusBar
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { db } from "../db/database";
 import * as ImagePicker from "expo-image-picker";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
 import ImageCropModal from "../components/ImageCropModal";
+import { API_URL } from "../services/api";
 import {
   Building2, Users, Camera, Image as ImageIcon, Plus, X, Trash2,
   Crop
@@ -28,6 +29,14 @@ export default function CadastrarLocalScreen({ navigation }) {
   // Crop & Rotation Studio
   const [cropImageRaw, setCropImageRaw] = useState(null);
   const [showCropModal, setShowCropModal] = useState(false);
+
+  const getFotoUri = (url) => {
+    if (!url) return null;
+    if (url.startsWith("/uploads/")) {
+      return `${API_URL}${url}`;
+    }
+    return url;
+  };
 
   const carregar = useCallback(() => {
     try {
@@ -115,6 +124,7 @@ export default function CadastrarLocalScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <View style={styles.headerRow}>
         <TouchableOpacity
           style={[styles.mainActionBtn, { backgroundColor: "#0284c7" }]}
@@ -129,26 +139,29 @@ export default function CadastrarLocalScreen({ navigation }) {
         data={locais}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContainer}
-        renderItem={({ item }) => (
-          <View style={styles.localCard}>
-            {item.fotoUrl ? (
-              <Image source={{ uri: item.fotoUrl }} style={styles.localImage} resizeMode="cover" />
-            ) : (
-              <View style={styles.localImagePlaceholder}>
-                <Building2 size={32} color="#94a3b8" />
-              </View>
-            )}
-            <View style={styles.localInfo}>
-              <Text style={styles.localName}>{item.nome}</Text>
-              <View style={styles.capacidadeRow}>
-                <Users size={14} color="#64748b" style={{ marginRight: 4 }} />
-                <Text style={styles.capacidadeText}>
-                  Capacidade: {item.capacidade > 0 ? `${item.capacidade} pessoas` : "Livre"}
-                </Text>
+        renderItem={({ item }) => {
+          const foto = getFotoUri(item.fotoUrl);
+          return (
+            <View style={styles.localCard}>
+              {foto ? (
+                <Image source={{ uri: foto }} style={styles.localImage} resizeMode="cover" />
+              ) : (
+                <View style={styles.localImagePlaceholder}>
+                  <Building2 size={32} color="#94a3b8" />
+                </View>
+              )}
+              <View style={styles.localInfo}>
+                <Text style={styles.localName}>{item.nome}</Text>
+                <View style={styles.capacidadeRow}>
+                  <Users size={14} color="#64748b" style={{ marginRight: 4 }} />
+                  <Text style={styles.capacidadeText}>
+                    Capacidade: {item.capacidade > 0 ? `${item.capacidade} pessoas` : "Livre"}
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-        )}
+          );
+        }}
         ListEmptyComponent={() => (
           <View style={styles.emptyContainer}>
             <Building2 size={40} color="#cbd5e1" />
@@ -268,7 +281,11 @@ export default function CadastrarLocalScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8fafc" },
+  container: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 24) : 0
+  },
   headerRow: { padding: 16, paddingBottom: 8 },
   mainActionBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",

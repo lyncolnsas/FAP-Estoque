@@ -158,16 +158,17 @@ export const syncPull = async () => {
     }
   };
 
-  safeExec('DELETE FROM Equipamento WHERE synced = 1');
+  safeExec('DELETE FROM Equipamento WHERE synced = 1 OR synced IS NULL');
   safeExec('DELETE FROM Categoria');
   safeExec('DELETE FROM TipoEquipamento');
   safeExec('DELETE FROM Requisicao');
-  safeExec('DELETE FROM ItemRequisicao WHERE synced = 1');
+  safeExec('DELETE FROM ItemRequisicao WHERE synced = 1 OR synced IS NULL');
   safeExec('DELETE FROM TipoAvaria');
-  safeExec('DELETE FROM HistoricoAvaria WHERE synced = 1');
+  safeExec('DELETE FROM HistoricoAvaria WHERE synced = 1 OR synced IS NULL');
   safeExec('DELETE FROM Usuario');
-  safeExec('DELETE FROM Local WHERE synced = 1');
-  safeExec('DELETE FROM ReservaLocal WHERE synced = 1');
+  safeExec('DELETE FROM Local WHERE synced = 1 OR synced IS NULL');
+  safeExec('DELETE FROM ReservaLocal WHERE synced = 1 OR synced IS NULL');
+  safeExec('DELETE FROM EmprestimoOffline WHERE synced = 1');
 
   for (const eq of data.equipamentos || []) {
     db.runSync(
@@ -207,7 +208,10 @@ export const syncPull = async () => {
   }
 
   for (const u of data.usuarios || []) {
-    db.runSync('INSERT OR REPLACE INTO Usuario (id, nome, departamento, whatsapp) VALUES (?, ?, ?, ?)', [u.id, u.nome, u.departamento, u.whatsapp]);
+    db.runSync(
+      'INSERT OR REPLACE INTO Usuario (id, nome, departamento, whatsapp, fotoUrl, corPersonalizada, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [u.id, u.nome, u.departamento, u.whatsapp, u.fotoPerfilUrl || u.fotoUrl || null, u.corPersonalizada || null, u.role || 'SETOR']
+    );
   }
 
   for (const loc of data.locais || []) {
@@ -223,6 +227,37 @@ export const syncPull = async () => {
 
 export const syncPush = async () => {
   if (!API_URL) throw new Error('Servidor não configurado.');
+
+  // AUTO-HEAL: Garante que qualquer EmprestimoOffline pendente (synced = 0) esteja na fila de envio
+  try {
+    const empsPendentes = db.getAllSync('SELECT * FROM EmprestimoOffline WHERE synced = 0');
+    for (const emp of empsPendentes) {
+      const logExists = db.getFirstSync(
+        'SELECT id FROM OfflineLog WHERE itemId = ? OR (tipo = "EMPRESTIMO_OFFLINE" AND dados LIKE ?)',
+        [emp.id, `%${emp.equipamentoId || emp.patrimonio}%`]
+      );
+      if (!logExists) {
+        db.runSync(
+          'INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)',
+          [
+            'EMPRESTIMO_OFFLINE',
+            emp.id,
+            JSON.stringify({
+              requisicaoId: emp.id,
+              equipamentoId: emp.equipamentoId,
+              patrimonio: emp.patrimonio,
+              solicitanteNome: emp.solicitanteNome,
+              departamento: emp.departamento,
+              dataCriacao: emp.dataCriacao
+            }),
+            emp.dataCriacao || new Date().toISOString()
+          ]
+        );
+      }
+    }
+  } catch (e) {
+    console.warn('Aviso no auto-heal de empréstimos offline:', e);
+  }
 
   const logs = db.getAllSync('SELECT * FROM OfflineLog WHERE synced = 0');
   if (logs.length === 0) return { success: true, message: 'Nenhuma ação offline pendente.' };
@@ -242,7 +277,7 @@ export const syncPush = async () => {
       dados.fotoUrl.startsWith('content:')
     );
 
-    if ((log.tipo === 'NOVO_EQUIPAMENTO' || log.tipo === 'NOVO_LOCAL') && isLocalFile) {
+    if ((log.tipo === 'NOVO_EQUIPAMENTO' || log.tipo === 'EDITAR_EQUIPAMENTO' || log.tipo === 'NOVO_LOCAL') && isLocalFile) {
       try {
         const fileUri = dados.fotoUrl;
         const filename = fileUri.split('/').pop();
@@ -311,16 +346,33 @@ export const syncPush = async () => {
       try {
         if (acao.tipo === 'NOVO_LOCAL') {
           db.runSync('UPDATE Local SET synced = 1 WHERE id = ?', [acao.itemId]);
-        } else if (acao.tipo === 'NOVO_EQUIPAMENTO') {
+        } else if (acao.tipo === 'NOVO_EQUIPAMENTO' || acao.tipo === 'EDITAR_EQUIPAMENTO') {
           db.runSync('UPDATE Equipamento SET synced = 1 WHERE id = ?', [acao.itemId]);
+          db.runSync('UPDATE HistoricoAvaria SET synced = 1 WHERE equipamentoId = ?', [acao.itemId]);
         } else if (acao.tipo === 'NOVA_RESERVA_LOCAL') {
           db.runSync('UPDATE ReservaLocal SET synced = 1 WHERE id = ?', [acao.itemId]);
         } else if (acao.tipo === 'NOVA_CATEGORIA') {
           db.runSync('UPDATE Categoria SET synced = 1 WHERE id = ?', [acao.itemId]);
         } else if (acao.tipo === 'NOVO_TIPO_EQUIPAMENTO') {
           db.runSync('UPDATE TipoEquipamento SET synced = 1 WHERE id = ?', [acao.itemId]);
-        } else if (acao.tipo === 'NOVA_AVARIA_REGISTRO' || acao.tipo === 'RESOLVER_AVARIA') {
+        } else if (acao.tipo === 'NOVA_AVARIA_REGISTRO') {
           db.runSync('UPDATE HistoricoAvaria SET synced = 1 WHERE id = ?', [acao.itemId]);
+        } else if (acao.tipo === 'RESOLVER_AVARIA') {
+          db.runSync('UPDATE HistoricoAvaria SET synced = 1 WHERE id = ?', [acao.itemId]);
+          if (acao.dados && acao.dados.equipamentoId) {
+            db.runSync('UPDATE Equipamento SET synced = 1 WHERE id = ?', [acao.dados.equipamentoId]);
+          }
+        } else if (acao.tipo === 'EMPRESTIMO_OFFLINE') {
+          db.runSync('UPDATE EmprestimoOffline SET synced = 1 WHERE id = ?', [acao.itemId]);
+          db.runSync('UPDATE ItemRequisicao SET synced = 1 WHERE requisicaoId = ?', [acao.itemId]);
+          if (acao.dados && acao.dados.equipamentoId) {
+            db.runSync('UPDATE EmprestimoOffline SET synced = 1 WHERE equipamentoId = ?', [acao.dados.equipamentoId]);
+            db.runSync('UPDATE Equipamento SET synced = 1, statusCondicao = "EMPRESTADO" WHERE id = ?', [acao.dados.equipamentoId]);
+          }
+          if (acao.dados && acao.dados.patrimonio) {
+            db.runSync('UPDATE EmprestimoOffline SET synced = 1 WHERE patrimonio = ?', [acao.dados.patrimonio]);
+            db.runSync('UPDATE Equipamento SET synced = 1, statusCondicao = "EMPRESTADO" WHERE codigoPatrimonio = ?', [acao.dados.patrimonio]);
+          }
         }
       } catch (e) {
         console.warn('Erro ao marcar entidade como synced:', e);

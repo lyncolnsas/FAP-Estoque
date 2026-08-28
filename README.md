@@ -93,9 +93,25 @@ Podem ser rodados como Administrador no Windows hospedeiro para garantir que a p
 
 ---
 
-## 🔒 Atualizações Recentes: Autenticação Offline-First e Sync de Imagens
+## 🔒 Atualizações Recentes do Sistema
 
-1. **Autenticação Segura de Sincronização**: O servidor (API) e o PWA passaram a exigir uma Palavra-Passe para liberação do acesso e sincronismo, usando o cabeçalho `x-sync-password`.
-2. **Descoberta Inteligente (Mobile)**: O App Mobile implementou uma camada de discovery aprimorada que tenta o ping portando a senha salva offline. Erros 401 Unauthorized bloqueiam o handshake adequadamente, abrindo o modal visual pedindo a senha.
-3. **Resiliência de Teclado**: O aplicativo móvel recebeu tratamento via `KeyboardAvoidingView` no modal da Home e do Leitor de QRCode para evitar que o teclado nativo encubra os inputs em dispositivos menores.
-4. **Cache Físico de Imagens (Offline Completo)**: O motor de sincronização (`syncPull`) do Mobile foi recriado para baixar via `expo-file-system` as miniaturas do servidor, reescrevendo o banco de dados interno com a URL local `file:///...`. Isso tornou o acesso ao Acervo 100% independente de internet após a Sincronização.
+1. **Gestão Completa de Solicitantes Avulsos & Promoção de Acesso:**
+   - Empréstimos avulsos criados no Mobile ou PWA salvam automaticamente o solicitante no banco (`Usuario` com `role: 'AVULSO'`).
+   - Gestão no painel com edição de nome, departamento e WhatsApp, além de botão para **"Dar Acesso ao Sistema"** (concede login/senha mantendo todo o histórico anterior).
+   - Relatórios detalhados com contagem de requisições, total de itens retirados e itens atualmente em posse.
+2. **Empréstimos Agrupados por Modelo com Seletor de Quantidade (Mobile):**
+   - O aplicativo móvel agora agrupa aparelhos idênticos em cards únicos de modelo (ex: Par Led), com seletor interativo `[-] [ qtd ] [+]` e controle de estoque disponível em tempo real.
+3. **Integração com Fotos de Perfil do WhatsApp:**
+   - O backend busca automaticamente a foto oficial do perfil de contatos e usuários via Baileys (`sock.profilePictureUrl`) e sincroniza com o PWA e o App Mobile.
+4. **Autenticação Segura de Sincronização e Palavra-Passe:**
+   - O servidor (API) e o PWA utilizam validação de Palavra-Passe com cabeçalho `x-sync-password` e modal de autenticação com foco automático no app.
+5. **Cache Físico de Imagens (Offline Completo):**
+   - O motor `syncPull` do Mobile baixa e armazena localmente as fotos de equipamentos, locais e usuários no armazenamento interno (`file:///...`), permitindo visualização de fotos 100% offline.
+
+---
+
+## 📦 Artefatos e Executáveis de Produção
+
+- 📱 **APK Android:** [`app-release.apk`](app-release.apk) *(Pronto para instalação em coletores e smartphones)*
+- 🖥️ **Instalador Windows (EXE):** [`FAP-Painel/dist/Painel FAP Setup 1.0.0.exe`](FAP-Painel/dist/)
+- 💼 **Executável Portátil (EXE):** [`FAP-Painel/dist/Painel FAP 1.0.0.exe`](FAP-Painel/dist/)

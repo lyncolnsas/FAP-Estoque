@@ -1,8 +1,9 @@
 import * as Print from 'expo-print';
+import QRCode from 'qrcode';
 
 export const imprimirComprovante = async (requisicao, equipamentos, formato = '80mm', acao = 'SEPARACAO') => {
   const agora = new Date();
-  const dataFormatada = `${agora.toLocaleDateString('pt-BR')} as ${agora.toLocaleTimeString('pt-BR')}`;
+  const dataFormatada = `${agora.toLocaleDateString('pt-BR')} às ${agora.toLocaleTimeString('pt-BR')}`;
   
   // Define a largura baseada no formato escolhido
   let width = '100%';
@@ -81,7 +82,7 @@ export const imprimirComprovante = async (requisicao, equipamentos, formato = '8
     </head>
     <body>
       <div class="header">
-        <h1 class="title">SLAVE ESTOQUE</h1>
+        <h1 class="title">FAP ESTOQUE</h1>
         <p class="subtitle">COMPROVANTE DE ${acao === 'SEPARACAO' ? 'ENTREGA' : 'DEVOLUCAO'}</p>
       </div>
 
@@ -89,18 +90,18 @@ export const imprimirComprovante = async (requisicao, equipamentos, formato = '8
         <div class="info-row"><span class="info-label">Requisitante:</span> ${requisicao.solicitanteNome || 'N/A'}</div>
         <div class="info-row"><span class="info-label">Depto:</span> ${requisicao.departamento || 'N/A'}</div>
         <div class="info-row"><span class="info-label">Data:</span> ${dataFormatada}</div>
-        <div class="info-row"><span class="info-label">Ticket ID:</span> ${requisicao.id.substring(0,8)}</div>
+        <div class="info-row"><span class="info-label">Ticket ID:</span> ${(requisicao.id || '').substring(0,8)}</div>
       </div>
 
       <table class="table">
         <thead>
           <tr>
-            <th>Patrimonio</th>
+            <th>Patrimônio</th>
             <th>Equipamento</th>
           </tr>
         </thead>
         <tbody>
-          ${equipamentos.map(eq => `
+          ${(equipamentos || []).map(eq => `
             <tr>
               <td>${eq.codigoPatrimonio || 'N/A'}</td>
               <td>${eq.nome || 'N/A'}</td>
@@ -115,7 +116,7 @@ export const imprimirComprovante = async (requisicao, equipamentos, formato = '8
       </div>
 
       <div class="footer">
-        <p>Impresso via Slave Estoque Mobile</p>
+        <p>Impresso via FAP Estoque Mobile</p>
       </div>
     </body>
     </html>
@@ -124,8 +125,7 @@ export const imprimirComprovante = async (requisicao, equipamentos, formato = '8
   try {
     await Print.printAsync({
       html: htmlContent,
-      // para térmica e A4 usando Print service do Android, deixar a propria lib formatar
-      width: formato === 'A4' ? undefined : (formato === '80mm' ? 302 : 219) // 80mm ~ 302px, 58mm ~ 219px (estimativa 96 dpi)
+      width: formato === 'A4' ? undefined : (formato === '80mm' ? 302 : 219)
     });
     return true;
   } catch (error) {
@@ -136,40 +136,105 @@ export const imprimirComprovante = async (requisicao, equipamentos, formato = '8
 
 export const imprimirEtiqueta = async (equipamento, formato = '58mm') => {
   let width = '58mm';
-  if (formato === 'A4') width = '100%';
-  if (formato === '80mm') width = '80mm';
+  let qrSize = 140;
+  if (formato === 'A4') {
+    width = '100%';
+    qrSize = 200;
+  } else if (formato === '80mm') {
+    width = '80mm';
+    qrSize = 180;
+  }
   
+  let qrCodeDataUrl = '';
+  try {
+    qrCodeDataUrl = await QRCode.toDataURL(equipamento.codigoPatrimonio || 'PATR-0000', {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: qrSize * 2,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    });
+  } catch (e) {
+    console.error('Erro ao gerar QR Code para impressão:', e);
+  }
+
   const htmlContent = `
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
       <meta charset="UTF-8">
-      <title>Etiqueta</title>
-      <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Etiqueta QR Code</title>
       <style>
-        body { font-family: sans-serif; text-align: center; margin: 0; padding: 10px; width: ${width}; }
-        .name { font-weight: bold; font-size: 16px; margin-bottom: 10px; }
-        .patrimonio { font-size: 12px; margin-top: 5px; }
-        svg { max-width: 100%; height: auto; }
+        @page {
+          margin: 0;
+        }
+        body { 
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          text-align: center; 
+          margin: 0 auto; 
+          padding: 8px 6px; 
+          width: ${width}; 
+          box-sizing: border-box;
+          color: #000000;
+        }
+        .container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+        }
+        .title { 
+          font-weight: 800; 
+          font-size: ${formato === '80mm' ? '15px' : '13px'}; 
+          line-height: 1.2;
+          margin-bottom: 6px;
+          word-break: break-word;
+          max-width: 100%;
+        }
+        .qr-wrapper {
+          margin: 4px auto;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+        }
+        .qr-img {
+          width: ${qrSize}px;
+          height: ${qrSize}px;
+          display: block;
+        }
+        .patrimonio { 
+          font-size: ${formato === '80mm' ? '14px' : '12px'}; 
+          font-weight: 900;
+          letter-spacing: 0.5px;
+          margin-top: 6px;
+          padding: 2px 6px;
+          border: 1px dashed #000;
+          border-radius: 4px;
+        }
+        .footer {
+          font-size: 8px;
+          color: #555;
+          margin-top: 4px;
+          text-transform: uppercase;
+        }
       </style>
     </head>
     <body>
-      <div class="name">${equipamento.nome}</div>
-      <svg id="barcode"></svg>
-      <div class="patrimonio">${equipamento.codigoPatrimonio}</div>
-      <script>
-        try {
-          JsBarcode("#barcode", "${equipamento.codigoPatrimonio}", {
-            format: "CODE128",
-            width: 2,
-            height: 50,
-            displayValue: false
-          });
-        } catch(e) {}
-      </script>
+      <div class="container">
+        <div class="title">${equipamento.nome || 'Equipamento'}</div>
+        <div class="qr-wrapper">
+          ${qrCodeDataUrl ? `<img class="qr-img" src="${qrCodeDataUrl}" alt="QR Code" />` : `<div style="font-size:11px;">[QR CODE INDISPONÍVEL]</div>`}
+        </div>
+        <div class="patrimonio">${equipamento.codigoPatrimonio || 'SEM PATRIMÔNIO'}</div>
+        <div class="footer">FAP ESTOQUE</div>
+      </div>
     </body>
     </html>
   `;
+
   try {
     await Print.printAsync({
       html: htmlContent,

@@ -78,7 +78,10 @@ export const initDB = () => {
       id TEXT PRIMARY KEY,
       nome TEXT,
       departamento TEXT,
-      whatsapp TEXT
+      whatsapp TEXT,
+      fotoUrl TEXT,
+      corPersonalizada TEXT,
+      role TEXT DEFAULT 'SETOR'
     );
 
     CREATE TABLE IF NOT EXISTS EmprestimoOffline (
@@ -130,6 +133,18 @@ export const initDB = () => {
   safeAlter(`ALTER TABLE HistoricoAvaria ADD COLUMN synced INTEGER DEFAULT 1;`);
   safeAlter(`ALTER TABLE Categoria ADD COLUMN synced INTEGER DEFAULT 1;`);
   safeAlter(`ALTER TABLE TipoEquipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN fotoUrl TEXT;`);
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN corPersonalizada TEXT;`);
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN role TEXT DEFAULT 'SETOR';`);
+
+  // Sanitização para garantir que nenhum registro pré-existente fique com synced = NULL
+  safeAlter(`UPDATE HistoricoAvaria SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE Equipamento SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE Local SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE ReservaLocal SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE ItemRequisicao SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE Categoria SET synced = 1 WHERE synced IS NULL;`);
+  safeAlter(`UPDATE TipoEquipamento SET synced = 1 WHERE synced IS NULL;`);
 
   console.log('Banco de dados SQLite inicializado com sucesso.');
 };

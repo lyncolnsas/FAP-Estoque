@@ -21,11 +21,12 @@ $PwaDest = Join-Path $TempBuildDir "pwa"
 
 # Copiando arquivos originais excluindo node_modules para não gerar conflito de permissões/arquiteturas na cópia
 Write-Host " Copiando API..."
-robocopy $ApiSrc $ApiDest /E /XD node_modules .git /XF .env | Out-Null
+robocopy $ApiSrc $ApiDest /E /XD node_modules .git dist /XF .env /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { Write-Warning "Robocopy API code: $LASTEXITCODE" }
+
 Write-Host " Copiando PWA..."
-robocopy $PwaSrc $PwaDest /E /XD node_modules .git /XF .env | Out-Null
-# Ignore error code < 8 for robocopy (1 means files copied successfully)
-if ($LASTEXITCODE -ge 8) { throw "Robocopy failed" }
+robocopy $PwaSrc $PwaDest /E /XD node_modules .git dist /XF .env /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) { Write-Warning "Robocopy PWA code: $LASTEXITCODE" }
 
 # 2. Build PWA no Ambiente Isolado
 Write-Host "`n[2/4] Compilando Frontend (PWA) Isolado..."
