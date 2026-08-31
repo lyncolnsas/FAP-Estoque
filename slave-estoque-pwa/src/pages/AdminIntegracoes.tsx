@@ -72,25 +72,38 @@ export default function AdminIntegracoes() {
 
   useEffect(() => {
     carregarIntegracoes();
-    // Auto refresh do whatsapp a cada 5 segundos se estiver aguardando QR
+    // Auto refresh mais frequente quando aguardando QR ou reconectando
     const interval = setInterval(() => {
-      if (waStatus === 'AGUARDANDO_QR' || waStatus === 'CARREGANDO' || waStatus === 'DESCONECTADO') {
+      if (
+        waStatus === 'AGUARDANDO_QR' ||
+        waStatus === 'CARREGANDO' ||
+        waStatus === 'DESCONECTADO' ||
+        waStatus === 'MODO_ESPERA'
+      ) {
         carregarIntegracoes();
       }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [waStatus, token]);
 
   const reconectarWhatsapp = async () => {
     try {
       setWaStatus('CARREGANDO');
+      setWaQr(null);
       await fetch(api('/configuracoes/whatsapp/reconectar'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
-      carregarIntegracoes();
+      // Inicia polling agressivo para pegar o QR logo que aparecer
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        await carregarIntegracoes();
+        if (attempts >= 20) clearInterval(poll); // Para após 60s
+      }, 3000);
     } catch (err) {
       console.error(err);
+      setWaStatus('MODO_ESPERA');
     }
   };
 

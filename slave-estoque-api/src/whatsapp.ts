@@ -68,18 +68,16 @@ export class WhatsappSpecialist {
         console.log(`[WhatsApp] Conexão fechada. Status: ${statusCode}. Reconectar: ${shouldReconnect}`);
         
         if (shouldReconnect) {
-          // Se gerou QR Code e a conexão caiu (provavelmente expirou), entramos em modo de espera
-          if (this.qrCount >= 2) {
-            console.log('[WhatsApp] QR Code expirou 2 vezes. Entrando em modo de espera.');
+          // Se gerou QR Code 5 vezes sem conexão, entramos em modo de espera
+          if (this.qrCount >= 5) {
+            console.log('[WhatsApp] QR Code expirou 5 vezes. Entrando em modo de espera.');
             this.isInWaitMode = true;
             (global as any).whatsappStatus = 'MODO_ESPERA';
             (global as any).whatsappQrCode = null;
-            if (this.sock) {
-                this.sock.ws?.close();
-            }
+            try { this.sock?.ws?.close(); } catch (e) {}
           } else {
             (global as any).whatsappStatus = 'DESCONECTADO';
-            setTimeout(() => this.connect(), 5000);
+            setTimeout(() => this.connect(), 3000);
           }
         } else {
           console.log('[WhatsApp] Deslogado. Removendo sessão...');
@@ -101,9 +99,19 @@ export class WhatsappSpecialist {
     console.log('[WhatsApp] Solicitada reconexão manual...');
     this.isInWaitMode = false;
     this.qrCount = 0;
-    if (this.sock) {
-      this.sock.ws?.close();
+    (global as any).whatsappStatus = 'DESCONECTADO';
+    (global as any).whatsappQrCode = null;
+    try {
+      if (this.sock) {
+        try { await this.sock.logout(); } catch (e) {}
+        try { this.sock.ws?.close(); } catch (e) {}
+        this.sock = null;
+      }
+    } catch (e) {
+      console.error('[WhatsApp] Erro ao fechar socket antes de reconectar:', e);
     }
+    // Aguarda socket fechar antes de reconectar
+    await new Promise(resolve => setTimeout(resolve, 800));
     return this.connect();
   }
 
