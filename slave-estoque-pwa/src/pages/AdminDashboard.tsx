@@ -133,8 +133,8 @@ export default function AdminDashboard() {
       {/* ── Cabeçalho ──────────────────────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Painel de Estoque</h1>
-          <p className="text-slate-500 mt-1">Gerencie e inicie empréstimos, devoluções e reservas de locais.</p>
+          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Dashboard Geral</h1>
+          <p className="text-slate-500 mt-1">Visão geral do acervo, indicadores de uso e pendências operacionais.</p>
         </div>
         <div className="flex items-center gap-3">
           <a

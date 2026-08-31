@@ -19,7 +19,7 @@ const NAV_SECTIONS = [
   {
     label: 'Operacional',
     items: [
-      { name: 'Painel de Estoque',     path: '/admin/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'ESTOQUISTA'] },
+      { name: 'Dashboard Geral',       path: '/admin/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'ESTOQUISTA'] },
       { name: 'Solicitações',          path: '/',                icon: CalendarClock,   roles: ['ADMIN', 'ESTOQUISTA', 'SETOR'] },
       { name: 'Meus Pedidos',          path: '/meus-pedidos',    icon: ClipboardList,   roles: ['SETOR'] },
       { name: 'Entregas & Devoluções', path: '/entregas',        icon: Truck,           roles: ['ADMIN', 'ESTOQUISTA'] },

@@ -440,8 +440,8 @@ export default function Dashboard() {
     >
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-slate-800 tracking-tight">{isSetor ? 'Minhas Solicitações' : 'Painel de Estoque'}</h2>
-          <p className="text-slate-500 mt-1">{isSetor ? 'Acompanhe seus pedidos e eventos organizados.' : 'Gerencie e inicie empréstimos ou devoluções agrupados por solicitante.'}</p>
+          <h2 className="text-3xl font-bold text-slate-800 tracking-tight">{isSetor ? 'Minhas Solicitações' : 'Entregas & Devoluções'}</h2>
+          <p className="text-slate-500 mt-1">{isSetor ? 'Acompanhe seus pedidos e eventos organizados.' : 'Gerencie e inicie empréstimos, devoluções e reservas agrupados por solicitante.'}</p>
         </div>
         
         {!isSetor && (
