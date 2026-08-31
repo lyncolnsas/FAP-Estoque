@@ -87,6 +87,30 @@ interface ReservaLocal {
 }
 
 
+export function getUserColor(name: string, customColor?: string): string {
+  if (customColor && customColor.trim()) return customColor;
+  if (!name) return '#2563eb';
+  const palette = [
+    '#2563eb', // Blue 600
+    '#0d9488', // Teal 600
+    '#7c3aed', // Violet 600
+    '#d97706', // Amber 600
+    '#db2777', // Pink 600
+    '#059669', // Emerald 600
+    '#4f46e5', // Indigo 600
+    '#ea580c', // Orange 600
+    '#0891b2', // Cyan 600
+    '#ca8a04', // Yellow 600
+    '#9333ea', // Purple 600
+    '#16a34a', // Green 600
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return palette[Math.abs(hash) % palette.length];
+}
+
 const SplitDateTimeField = ({ 
   label, icon: Icon, value, onChange, required = false, themeClass, textClass, bgClass, borderClass 
 }: any) => {
@@ -265,15 +289,19 @@ export default function CalendarioSolicitacoes() {
         const allowedCategories = new Set(categorias.map(c => c.id));
         const filteredItens = (req.itens || []).filter((i: any) => i.equipamento?.categoriaId && allowedCategories.has(i.equipamento.categoriaId));
         
-        if (filteredItens.length === 0 && !req.localId) return;
+        // Incluir se tem itens OU se tem local do evento solicitado
+        if (filteredItens.length === 0 && !req.localId && !req.local) return;
+
+        const solicitanteNome = req.solicitanteNome || req.usuario?.nome || 'Solicitante';
+        const userCor = getUserColor(solicitanteNome, req.usuarioCor || req.usuario?.corPersonalizada);
 
         eventosFormatados.push({
           id: req.id,
           tipo: 'REQUISICAO',
           status: req.status,
-          solicitante: req.solicitanteNome,
+          solicitante: solicitanteNome,
           departamento: req.departamento,
-          usuarioCor: req.usuario?.corPersonalizada,
+          usuarioCor: userCor,
           inicio: new Date(req.dataInicioEvento),
           fim: new Date(req.dataFimEvento),
           local: req.local?.nome,
@@ -285,21 +313,24 @@ export default function CalendarioSolicitacoes() {
     });
 
     todasReservas.forEach(res => {
-      if (res.status !== 'CONFIRMADA') return;
+      if (['CANCELADA', 'RECUSADA'].includes(res.status)) return;
       const ch = `${res.localId}-${new Date(res.dataInicio).getTime()}`;
       if (localReservaSet.has(ch)) return; 
 
       if (checkOverlap(res.dataInicio, res.dataFim)) {
+        const solicitanteNome = res.usuario?.nome || 'Usuário';
+        const userCor = getUserColor(solicitanteNome, res.usuarioCor || res.usuario?.corPersonalizada);
+
         eventosFormatados.push({
           id: res.id,
           tipo: 'RESERVA_LOCAL',
           status: res.status,
-          solicitante: res.usuario?.nome || 'Usuário',
+          solicitante: solicitanteNome,
           departamento: res.usuario?.departamento,
-          usuarioCor: res.usuario?.corPersonalizada,
+          usuarioCor: userCor,
           inicio: new Date(res.dataInicio),
           fim: new Date(res.dataFim),
-          local: res.local?.nome,
+          local: res.local?.nome || 'Espaço Físico',
           localId: res.localId,
           itens: null,
           rawItens: []
@@ -648,19 +679,40 @@ export default function CalendarioSolicitacoes() {
                     {date.getDate()}
                   </div>
                 </div>
-                <div className="flex flex-col gap-1 overflow-y-auto max-h-[80px] scrollbar-thin px-0.5">
-                  {dayEvents.slice(0, 4).map((ev, i) => (
-                    <div key={`${ev.id}-${i}`}
-                      onClick={(e) => { e.stopPropagation(); setViewingEvent(ev); }}
-                      className={`text-[10px] font-semibold px-1.5 py-1 rounded truncate shadow-sm hover:brightness-95 transition-all ${ev.usuarioCor ? '' : getEventColor(ev.status)}`}
-                      style={ev.usuarioCor ? { backgroundColor: ev.usuarioCor, color: '#fff' } : undefined}
-                      title={`${ev.solicitante} - ${ev.inicio.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}`}
-                    >
-                      {ev.inicio.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})} {ev.solicitante.split(' ')[0]}
-                    </div>
-                  ))}
+                <div className="flex flex-col gap-1 overflow-y-auto max-h-[86px] scrollbar-thin px-0.5">
+                  {dayEvents.slice(0, 4).map((ev, i) => {
+                    const firstName = (ev.solicitante || 'Usuário').split(' ')[0];
+                    const horaInicio = ev.inicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const isAguardando = ev.status === 'AGUARDANDO' || ev.status === 'PENDENTE';
+
+                    return (
+                      <div 
+                        key={`${ev.id}-${i}`}
+                        onClick={(e) => { e.stopPropagation(); setViewingEvent(ev); }}
+                        className="text-[10px] font-bold px-1.5 py-1 rounded-md truncate shadow-sm hover:brightness-95 transition-all text-white flex items-center gap-1 cursor-pointer"
+                        style={{ backgroundColor: ev.usuarioCor }}
+                        title={`${ev.solicitante} (${ev.departamento || ''}) - ${ev.local ? 'Local: ' + ev.local + ' | ' : ''}${horaInicio}`}
+                      >
+                        {ev.local && (
+                          <span className="shrink-0 text-[9px] bg-black/25 px-1 py-0.2 rounded font-extrabold flex items-center gap-0.5">
+                            <MapPin size={9} className="inline" /> {ev.local}
+                          </span>
+                        )}
+                        <span className="truncate">
+                          {horaInicio} {firstName}
+                        </span>
+                        {isAguardando && (
+                          <span className="shrink-0 text-[8px] bg-amber-400/90 text-amber-950 px-1 rounded font-black ml-auto">
+                            ⏳
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                   {dayEvents.length > 4 && (
-                    <div className="text-[10px] text-slate-500 font-bold px-1 text-center hover:text-slate-700 transition-colors">+{dayEvents.length - 4} mais</div>
+                    <div className="text-[10px] text-slate-500 font-bold px-1 text-center hover:text-slate-700 transition-colors">
+                      +{dayEvents.length - 4} mais
+                    </div>
                   )}
                 </div>
               </div>
@@ -954,9 +1006,17 @@ export default function CalendarioSolicitacoes() {
               <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><CalendarIcon className="text-blue-600"/> Detalhes do Evento</h3>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                    <p className="text-xs text-slate-500 mb-1 font-bold uppercase tracking-wider">Solicitante</p>
-                    <p className="font-bold text-slate-800">{viewingEvent.solicitante || 'N/A'}</p>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center gap-3">
+                    <div 
+                      className="w-10 h-10 rounded-xl text-white font-bold flex items-center justify-center text-sm shrink-0 shadow-sm"
+                      style={{ backgroundColor: viewingEvent.usuarioCor || '#2563eb' }}
+                    >
+                      {(viewingEvent.solicitante || 'US').substring(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-500 mb-0.5 font-bold uppercase tracking-wider">Solicitante</p>
+                      <p className="font-bold text-slate-800 truncate">{viewingEvent.solicitante || 'N/A'}</p>
+                    </div>
                   </div>
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                     <p className="text-xs text-slate-500 mb-1 font-bold uppercase tracking-wider">Departamento</p>
@@ -971,18 +1031,27 @@ export default function CalendarioSolicitacoes() {
                   </div>
                 </div>
                 {viewingEvent.local && (
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center gap-3">
-                    <MapPin className="text-blue-500 shrink-0" />
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1 font-bold uppercase tracking-wider">Local do Evento</p>
-                      <p className="font-bold text-slate-800 text-sm">{viewingEvent.local}</p>
+                  <div className="bg-emerald-50/80 p-4 rounded-xl border border-emerald-200/80 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <MapPin className="text-emerald-600 shrink-0" size={20} />
+                      <div>
+                        <p className="text-xs text-emerald-700 mb-0.5 font-bold uppercase tracking-wider">Local do Evento</p>
+                        <p className="font-bold text-emerald-900 text-base">{viewingEvent.local}</p>
+                      </div>
                     </div>
+                    <span className="bg-emerald-200/60 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full">
+                      {viewingEvent.status === 'AGUARDANDO' || viewingEvent.status === 'PENDENTE' ? 'Aguardando Aprovação' : 'Confirmado'}
+                    </span>
                   </div>
                 )}
-                {viewingEvent.itens && viewingEvent.itens.length > 0 && (
+                {viewingEvent.itens && viewingEvent.itens.length > 0 ? (
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                     <p className="text-xs text-slate-500 mb-2 font-bold uppercase tracking-wider flex items-center gap-2"><Package size={14}/> Equipamentos</p>
                     <p className="text-sm font-medium text-slate-700 leading-relaxed">{viewingEvent.itens}</p>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center text-xs text-slate-500 italic">
+                    Esta solicitação é exclusiva para reserva de espaço físico (sem materiais).
                   </div>
                 )}
                 <div className="pt-4 flex justify-end">
