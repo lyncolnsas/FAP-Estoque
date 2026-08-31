@@ -270,28 +270,32 @@ export default function Dashboard() {
   };
 
   // Lógica para ADMIN/ESTOQUISTA
-  const aguardando = requisicoes.filter(r => ['PENDENTE', 'AGUARDANDO'].includes(r.status));
-  const paraSeparar = requisicoes.filter(r => ['AGUARDANDO_SEPARACAO', 'EM_SEPARACAO', 'CONFIRMADA'].includes(r.status));
-  const emprestados = requisicoes.filter(r => ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(r.status));
-  const finalizados = requisicoes.filter(r => ['DEVOLVIDO', 'CANCELADO', 'RECUSADO', 'CANCELADA', 'RECUSADA'].includes(r.status));
+  const aguardando = requisicoes.filter(r => ['PENDENTE', 'AGUARDANDO'].includes(r.status) && !r.isReservaLocalOnly);
+  const paraSeparar = requisicoes.filter(r => ['AGUARDANDO_SEPARACAO', 'EM_SEPARACAO', 'CONFIRMADA'].includes(r.status) && !r.isReservaLocalOnly);
+  const emprestados = requisicoes.filter(r => ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(r.status) && !r.isReservaLocalOnly);
+  const finalizados = requisicoes.filter(r => ['DEVOLVIDO', 'CANCELADO', 'RECUSADO', 'CANCELADA', 'RECUSADA'].includes(r.status) && !r.isReservaLocalOnly);
+  const reservasLocais = requisicoes.filter(r => r.isReservaLocalOnly || (r.local && (!r.itens || r.itens.length === 0)));
 
   let adminListToRender: RequisicaoDashboard[] = [];
   if (activeTab === 'ANALISE' || activeTab === 'LIBERACAO') adminListToRender = aguardando;
   else if (activeTab === 'SEPARACAO') adminListToRender = paraSeparar;
   else if (activeTab === 'EMPRESTADOS' || activeTab === 'DEVOLUCAO') adminListToRender = emprestados;
   else if (activeTab === 'FINALIZADOS') adminListToRender = finalizados;
+  else if (activeTab === 'RESERVAS_LOCAIS') adminListToRender = reservasLocais;
 
   // Lógica para SETOR
   const myReqs = requisicoes.filter(r => r.usuarioId === user?.id || r.solicitanteNome === user?.nome);
   let setorListToRender: RequisicaoDashboard[] = [];
   if (activeTab === 'SETOR_ANALISE') {
-    setorListToRender = myReqs.filter(r => ['PENDENTE', 'AGUARDANDO'].includes(r.status));
+    setorListToRender = myReqs.filter(r => ['PENDENTE', 'AGUARDANDO'].includes(r.status) && !r.isReservaLocalOnly);
   } else if (activeTab === 'SETOR_APROVADOS') {
-    setorListToRender = myReqs.filter(r => ['AGUARDANDO_SEPARACAO', 'EM_SEPARACAO', 'CONFIRMADA'].includes(r.status));
+    setorListToRender = myReqs.filter(r => ['AGUARDANDO_SEPARACAO', 'EM_SEPARACAO', 'CONFIRMADA'].includes(r.status) && !r.isReservaLocalOnly);
   } else if (activeTab === 'SETOR_ANDAMENTO') {
-    setorListToRender = myReqs.filter(r => ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(r.status));
+    setorListToRender = myReqs.filter(r => ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(r.status) && !r.isReservaLocalOnly);
   } else if (activeTab === 'SETOR_FINALIZADOS') {
-    setorListToRender = myReqs.filter(r => ['DEVOLVIDO', 'CANCELADO', 'RECUSADO', 'CANCELADA', 'RECUSADA'].includes(r.status));
+    setorListToRender = myReqs.filter(r => ['DEVOLVIDO', 'CANCELADO', 'RECUSADO', 'CANCELADA', 'RECUSADA'].includes(r.status) && !r.isReservaLocalOnly);
+  } else if (activeTab === 'SETOR_RESERVAS') {
+    setorListToRender = myReqs.filter(r => r.isReservaLocalOnly || (r.local && (!r.itens || r.itens.length === 0)));
   }
 
   const listToRender = isSetor ? setorListToRender : adminListToRender;
@@ -472,6 +476,7 @@ export default function Dashboard() {
               <button onClick={() => setActiveTab('SETOR_APROVADOS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'SETOR_APROVADOS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Aprovados</button>
               <button onClick={() => setActiveTab('SETOR_ANDAMENTO')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'SETOR_ANDAMENTO' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Em Andamento</button>
               <button onClick={() => setActiveTab('SETOR_FINALIZADOS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'SETOR_FINALIZADOS' ? 'border-slate-500 text-slate-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Finalizados</button>
+              <button onClick={() => setActiveTab('SETOR_RESERVAS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'SETOR_RESERVAS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Minhas Reservas ({myReqs.filter(r => r.isReservaLocalOnly || (r.local && (!r.itens || r.itens.length === 0))).length})</button>
             </>
           ) : (
             <>
@@ -479,6 +484,7 @@ export default function Dashboard() {
               <button onClick={() => setActiveTab('SEPARACAO')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'SEPARACAO' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Para Separar ({paraSeparar.length})</button>
               <button onClick={() => setActiveTab('EMPRESTADOS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'EMPRESTADOS' || activeTab === 'DEVOLUCAO' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Emprestados / Em Uso ({emprestados.length})</button>
               <button onClick={() => setActiveTab('FINALIZADOS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'FINALIZADOS' ? 'border-slate-500 text-slate-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Devolvidos ({finalizados.length})</button>
+              <button onClick={() => setActiveTab('RESERVAS_LOCAIS')} className={`pb-3 whitespace-nowrap font-semibold text-lg transition-colors border-b-2 ${activeTab === 'RESERVAS_LOCAIS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Reservas de Locais ({reservasLocais.length})</button>
             </>
           )}
         </div>
