@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Package, LayoutDashboard, Database, MapPin, Layers, Users, Settings,
   LogOut, Menu, ClipboardList, ScanLine, CalendarClock, FileText,
-  AlertTriangle, Truck, CalendarRange, UserCircle, ChevronRight
+  AlertTriangle, Truck, UserCircle, ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -19,7 +19,7 @@ const NAV_SECTIONS = [
   {
     label: 'Operacional',
     items: [
-      { name: 'Painel',                path: '/admin/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'ESTOQUISTA'] },
+      { name: 'Painel de Estoque',     path: '/admin/dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'ESTOQUISTA'] },
       { name: 'Solicitações',          path: '/',                icon: CalendarClock,   roles: ['ADMIN', 'ESTOQUISTA', 'SETOR'] },
       { name: 'Meus Pedidos',          path: '/meus-pedidos',    icon: ClipboardList,   roles: ['SETOR'] },
       { name: 'Entregas & Devoluções', path: '/entregas',        icon: Truck,           roles: ['ADMIN', 'ESTOQUISTA'] },
@@ -33,7 +33,6 @@ const NAV_SECTIONS = [
       { name: 'Equipamentos', path: '/admin/equipamentos', icon: Database,      roles: ['ADMIN'] },
       { name: 'Categorias',   path: '/admin/categorias',   icon: Layers,        roles: ['ADMIN'] },
       { name: 'Locais',       path: '/admin/locais',       icon: MapPin,        roles: ['ADMIN'] },
-      { name: 'Reservas',     path: '/admin/reservas',     icon: CalendarRange, roles: ['ADMIN'] },
       { name: 'Avarias',      path: '/admin/avarias',      icon: AlertTriangle, roles: ['ADMIN'] },
     ],
   },
@@ -47,6 +46,7 @@ const NAV_SECTIONS = [
     ],
   },
 ];
+
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const { user, logout } = useAuth();
