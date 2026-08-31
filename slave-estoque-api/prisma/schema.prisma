@@ -118,6 +118,10 @@ model Requisicao {
   local                 Local?           @relation(fields: [localId], references: [id])
   horarioOrganizacao    DateTime?
   materialNecessario    String?
+  dataEntrega           DateTime?
+  operadorEntrega       String?
+  dataDevolucao         DateTime?
+  operadorDevolucao     String?
 
   itens                 ItemRequisicao[]
   historicoAvarias      HistoricoAvaria[]

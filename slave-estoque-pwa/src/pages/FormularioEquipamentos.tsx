@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 import { toast } from 'sonner';
+import { formatPhoneMask } from '../lib/utils';
 
 interface Equipamento {
   id: string;
@@ -282,7 +283,7 @@ export default function FormularioEquipamentos() {
 
           <div className="pt-2">
             <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp (com DDD) *</label>
-            <input name="whatsapp" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(e.target.value)} required placeholder="Ex: 11999999999" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
+            <input name="whatsapp" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(formatPhoneMask(e.target.value))} required placeholder="Ex: (99) 99156-1407" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
           </div>
         </div>
 

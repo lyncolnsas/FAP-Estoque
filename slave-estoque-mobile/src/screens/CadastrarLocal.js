@@ -7,12 +7,12 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import { db } from "../db/database";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
-import ImageCropModal from "../components/ImageCropModal";
 import { API_URL } from "../services/api";
 import {
   Building2, Users, Camera, Image as ImageIcon, Plus, X, Trash2,
-  Crop
+  Crop, RotateCw, FlipHorizontal
 } from "lucide-react-native";
 
 const generateId = () => `loc-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
@@ -25,10 +25,6 @@ export default function CadastrarLocalScreen({ navigation }) {
   const [capacidade, setCapacidade] = useState("");
   const [fotoUri, setFotoUri] = useState(null);
   const [saving, setSaving] = useState(false);
-
-  // Crop & Rotation Studio
-  const [cropImageRaw, setCropImageRaw] = useState(null);
-  const [showCropModal, setShowCropModal] = useState(false);
 
   const getFotoUri = (url) => {
     if (!url) return null;
@@ -54,33 +50,72 @@ export default function CadastrarLocalScreen({ navigation }) {
   );
 
   const handlePickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      return Alert.alert("Permissão", "Precisamos de acesso às suas fotos.");
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCropImageRaw(result.assets[0].uri);
-      setShowCropModal(true);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        return Alert.alert("Permissão", "Precisamos de acesso às suas fotos.");
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setFotoUri(result.assets[0].uri);
+      }
+    } catch (err) {
+      console.error("Erro ao selecionar foto:", err);
+      Alert.alert("Erro", "Não foi possível carregar a imagem da galeria.");
     }
   };
 
   const handleTakePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      return Alert.alert("Permissão", "Precisamos de acesso à câmera.");
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        return Alert.alert("Permissão", "Precisamos de acesso à câmera.");
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setFotoUri(result.assets[0].uri);
+      }
+    } catch (err) {
+      console.error("Erro ao abrir câmera:", err);
+      Alert.alert("Erro", "Não foi possível acionar a câmera.");
     }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCropImageRaw(result.assets[0].uri);
-      setShowCropModal(true);
+  };
+
+  const handleGirar90 = async () => {
+    if (!fotoUri) return;
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        fotoUri,
+        [{ rotate: 90 }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setFotoUri(manipResult.uri);
+    } catch (e) {
+      console.error("Erro ao girar imagem:", e);
+    }
+  };
+
+  const handleEspelhar = async () => {
+    if (!fotoUri) return;
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        fotoUri,
+        [{ flip: ImageManipulator.FlipType.Horizontal }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setFotoUri(manipResult.uri);
+    } catch (e) {
+      console.error("Erro ao espelhar imagem:", e);
     }
   };
 
@@ -195,15 +230,13 @@ export default function CadastrarLocalScreen({ navigation }) {
                     <Image source={{ uri: fotoUri }} style={styles.squarePhoto} resizeMode="cover" />
                   </View>
                   <View style={styles.photoControlsRow}>
-                    <TouchableOpacity
-                      style={styles.photoControlBtn}
-                      onPress={() => {
-                        setCropImageRaw(fotoUri);
-                        setShowCropModal(true);
-                      }}
-                    >
-                      <Crop size={16} color="#0284c7" />
-                      <Text style={styles.photoControlBtnText}>Recortar / Girar</Text>
+                    <TouchableOpacity style={styles.photoControlBtn} onPress={handleGirar90}>
+                      <RotateCw size={16} color="#0284c7" />
+                      <Text style={styles.photoControlBtnText}>Girar 90°</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.photoControlBtn} onPress={handleEspelhar}>
+                      <FlipHorizontal size={16} color="#0284c7" />
+                      <Text style={styles.photoControlBtnText}>Espelhar</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.photoControlBtn} onPress={handleTakePhoto}>
                       <Camera size={16} color="#0284c7" />
@@ -268,14 +301,6 @@ export default function CadastrarLocalScreen({ navigation }) {
           </View>
         </View>
       </Modal>
-
-      {/* STUDIO DE CORTE E ROTAÇÃO UNIFICADO */}
-      <ImageCropModal
-        visible={showCropModal}
-        imageUri={cropImageRaw}
-        onClose={() => setShowCropModal(false)}
-        onConfirm={(processedUri) => setFotoUri(processedUri)}
-      />
     </SafeAreaView>
   );
 }

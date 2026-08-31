@@ -4,14 +4,16 @@ import {
   StyleSheet, Alert, ActivityIndicator, SafeAreaView,
   KeyboardAvoidingView, Platform, ScrollView, Modal, StatusBar, Image
 } from "react-native";
-import { db } from "../db/database";
+import { db, initDB } from "../db/database";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
 import { syncPush, getApiUrl } from "../services/api";
+import SplitDateTimeField from "../components/SplitDateTimeField";
 import {
   Package, Search, User, Building2, CheckCircle, X,
   ChevronDown, Plus, Minus, Trash2, Layers, RefreshCw,
-  Phone, UserCheck, UserPlus, Sparkles
+  Phone, UserCheck, UserPlus, Sparkles, Clock, Wrench, Play, Square, Calendar, MapPin
 } from "lucide-react-native";
+import { formatPhoneMask } from "../utils/formatters";
 
 const generateId = () => `offline-emp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -22,6 +24,8 @@ export default function EmprestimoScreen({ navigation }) {
   const [equipamentos, setEquipamentos] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [categorias, setCategorias] = useState([]);
+  const [locais, setLocais] = useState([]);
+  const [selectedLocal, setSelectedLocal] = useState(null);
   const [emprestimosOffline, setEmprestimosOffline] = useState([]);
 
   // Carrinho de Modelos: { [nomeDoModelo]: quantidadeSelecionada }
@@ -34,6 +38,12 @@ export default function EmprestimoScreen({ navigation }) {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
+  // Horários do Evento
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [horarioOrganizacao, setHorarioOrganizacao] = useState("");
+  const [horarioInicio, setHorarioInicio] = useState(`${todayStr}T08:00`);
+  const [horarioTermino, setHorarioTermino] = useState(`${todayStr}T18:00`);
+
   // Modais e Filtros
   const [searchEquip, setSearchEquip] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState(null);
@@ -43,6 +53,7 @@ export default function EmprestimoScreen({ navigation }) {
   // Carregar dados locais do SQLite
   const carregar = useCallback(() => {
     try {
+      initDB();
       const eqs = db.getAllSync(
         "SELECT * FROM Equipamento WHERE statusCondicao = 'DISPONIVEL' AND permitirEmprestimo = 1 ORDER BY nome ASC"
       );
@@ -53,6 +64,9 @@ export default function EmprestimoScreen({ navigation }) {
 
       const cats = db.getAllSync("SELECT * FROM Categoria ORDER BY nome ASC");
       setCategorias(cats || []);
+
+      const locs = db.getAllSync("SELECT * FROM Local ORDER BY nome ASC");
+      setLocais(locs || []);
 
       const emps = db.getAllSync(
         "SELECT * FROM EmprestimoOffline WHERE synced = 0 ORDER BY dataCriacao DESC"
@@ -173,16 +187,58 @@ export default function EmprestimoScreen({ navigation }) {
     setShowUserDropdown(true);
   };
 
+  // Agrupamento dos Empréstimos Pendentes por Solicitação / Lote
+  const groupedPending = useMemo(() => {
+    const map = {};
+    for (const emp of emprestimosOffline) {
+      const key = `${emp.solicitanteNome}_${emp.dataCriacao}`;
+      if (!map[key]) {
+        map[key] = {
+          id: key,
+          solicitanteNome: emp.solicitanteNome,
+          departamento: emp.departamento,
+          dataCriacao: emp.dataCriacao,
+          dataInicioEvento: emp.dataInicioEvento,
+          dataFimEvento: emp.dataFimEvento,
+          horarioOrganizacao: emp.horarioOrganizacao,
+          itens: [],
+          rawEmps: []
+        };
+      }
+      map[key].rawEmps.push(emp);
+
+      const nomeEq = emp.equipamentoNome || "Equipamento";
+      const itemExistente = map[key].itens.find(i => i.nome === nomeEq);
+      if (itemExistente) {
+        itemExistente.total += 1;
+        itemExistente.patrimonios.push(emp.patrimonio);
+      } else {
+        map[key].itens.push({
+          nome: nomeEq,
+          total: 1,
+          patrimonios: [emp.patrimonio]
+        });
+      }
+    }
+    return Object.values(map);
+  }, [emprestimosOffline]);
+
   // Confirmar Registro de Empréstimo
   const handleConfirmar = async () => {
-    if (totalItensSelecionados === 0) {
-      return Alert.alert("Atenção", "Selecione pelo menos um equipamento no carrinho.");
+    if (totalItensSelecionados === 0 && !selectedLocal) {
+      return Alert.alert("Atenção", "Selecione ao menos um equipamento ou escolha um espaço/sala para reservar.");
     }
     if (!solicitanteNome.trim()) {
       return Alert.alert("Atenção", "Informe o nome do solicitante.");
     }
     if (!departamento.trim()) {
       return Alert.alert("Atenção", "Informe o departamento ou setor.");
+    }
+    if (!horarioInicio) {
+      return Alert.alert("Atenção", "Informe a data e horário de início do evento.");
+    }
+    if (!horarioTermino) {
+      return Alert.alert("Atenção", "Informe a data e horário de término do evento.");
     }
 
     setSaving(true);
@@ -221,11 +277,39 @@ export default function EmprestimoScreen({ navigation }) {
         db.runSync("UPDATE Usuario SET whatsapp = ? WHERE id = ?", [waLimpo, targetUser.id]);
       }
 
-      // 2. Insere a Requisição
+      // 2. Insere a Requisição (com Local se selecionado)
       db.runSync(
-        "INSERT OR REPLACE INTO Requisicao (id, solicitanteNome, departamento, status) VALUES (?, ?, ?, 'EMPRESTADO')",
-        [reqId, nomeLimpo, deptoLimpo]
+        "INSERT OR REPLACE INTO Requisicao (id, solicitanteNome, departamento, status, dataInicioEvento, dataFimEvento, horarioOrganizacao, localId, solicitanteWhatsapp) VALUES (?, ?, ?, 'EMPRESTADO', ?, ?, ?, ?, ?)",
+        [reqId, nomeLimpo, deptoLimpo, horarioInicio, horarioTermino, horarioOrganizacao || null, selectedLocal?.id || null, waLimpo || null]
       );
+
+      // Se for apenas reserva de local (sem materiais)
+      if (totalItensSelecionados === 0 && selectedLocal) {
+        db.runSync(
+          "INSERT OR REPLACE INTO ReservaLocal (id, localId, solicitanteNome, departamento, dataInicio, dataFim, status, synced) VALUES (?, ?, ?, ?, ?, ?, 'PENDENTE', 0)",
+          [reqId, selectedLocal.id, nomeLimpo, deptoLimpo, horarioInicio, horarioTermino]
+        );
+        db.runSync(
+          "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
+          [
+            "NOVA_RESERVA_LOCAL",
+            reqId,
+            JSON.stringify({
+              id: reqId,
+              localId: selectedLocal.id,
+              localNome: selectedLocal.nome,
+              solicitanteNome: nomeLimpo,
+              departamento: deptoLimpo,
+              whatsapp: waLimpo || null,
+              usuarioId: finalUserId || null,
+              dataInicio: horarioInicio,
+              dataFim: horarioTermino,
+              dataCriacao
+            }),
+            dataCriacao
+          ]
+        );
+      }
 
       // 3. Mapeia quantidades do carrinho para itens físicos reais
       let itensProcessados = 0;
@@ -239,8 +323,8 @@ export default function EmprestimoScreen({ navigation }) {
           const itemId = `item-${reqId}-${eq.id}`;
 
           db.runSync(
-            "INSERT INTO EmprestimoOffline (id, equipamentoId, equipamentoNome, patrimonio, solicitanteNome, departamento, dataCriacao, synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
-            [empId, eq.id, eq.nome, eq.codigoPatrimonio, nomeLimpo, deptoLimpo, dataCriacao]
+            "INSERT INTO EmprestimoOffline (id, equipamentoId, equipamentoNome, patrimonio, solicitanteNome, departamento, dataCriacao, dataInicioEvento, dataFimEvento, horarioOrganizacao, localId, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            [empId, eq.id, eq.nome, eq.codigoPatrimonio, nomeLimpo, deptoLimpo, dataCriacao, horarioInicio, horarioTermino, horarioOrganizacao || null, selectedLocal?.id || null]
           );
 
           db.runSync(
@@ -266,7 +350,11 @@ export default function EmprestimoScreen({ navigation }) {
                 departamento: deptoLimpo,
                 whatsapp: waLimpo || null,
                 usuarioId: finalUserId || null,
-                dataCriacao
+                localId: selectedLocal?.id || null,
+                dataCriacao,
+                horarioOrganizacao: horarioOrganizacao || null,
+                dataInicioEvento: horarioInicio,
+                dataFimEvento: horarioTermino
               }),
               dataCriacao
             ]
@@ -286,59 +374,62 @@ export default function EmprestimoScreen({ navigation }) {
 
       // Limpar formulário
       setCarrinho({});
+      setSelectedLocal(null);
       setSolicitanteNome("");
       setDepartamento("");
       setWhatsapp("");
       setSelectedUser(null);
+      const today = new Date().toISOString().split("T")[0];
+      setHorarioOrganizacao("");
+      setHorarioInicio(`${today}T08:00`);
+      setHorarioTermino(`${today}T18:00`);
       carregar();
     } catch (e) {
       console.error("Erro ao registrar empréstimo:", e);
-      Alert.alert("Erro", "Ocorreu um erro ao salvar o empréstimo offline.");
+      Alert.alert("Erro ao Salvar", (e && e.message) ? `Detalhes do erro: ${e.message}` : "Ocorreu um erro ao salvar o empréstimo offline.");
     } finally {
       setSaving(false);
     }
   };
 
-  // Ações nos Cards de Pendentes
-  const handleDarBaixaPendente = (emp) => {
+  // Ações nos Cards Agrupados de Pendentes
+  const handleDarBaixaPendenteGrupo = (grupo) => {
     Alert.alert(
-      "Confirmar Devolução",
-      `Deseja dar baixa/devolução no empréstimo de "${emp.equipamentoNome}" (${emp.patrimonio}) para ${emp.solicitanteNome}? O item voltará ao estoque disponível.`,
+      "Confirmar Devolução em Lote",
+      `Deseja dar baixa/devolução em todos os ${grupo.rawEmps.length} equipamento(s) de ${grupo.solicitanteNome}? Todos os itens voltarão ao estoque disponível.`,
       [
         { text: "Cancelar", style: "cancel" },
         {
           text: "Confirmar Devolução",
           onPress: async () => {
             try {
-              db.runSync(
-                "UPDATE Equipamento SET statusCondicao = 'DISPONIVEL', synced = 0 WHERE id = ? OR codigoPatrimonio = ?",
-                [emp.equipamentoId, emp.patrimonio]
-              );
-              db.runSync("UPDATE EmprestimoOffline SET synced = 1 WHERE id = ?", [emp.id]);
-              db.runSync("UPDATE ItemRequisicao SET statusDevolucao = 1, synced = 0 WHERE requisicaoId = ?", [emp.id]);
-              db.runSync("UPDATE Requisicao SET status = 'DEVOLVIDO' WHERE id = ?", [emp.id]);
-
               const dataHora = new Date().toISOString();
-              db.runSync(
-                "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
-                [
-                  "DEVOLUCAO",
-                  `item-${emp.id}`,
-                  JSON.stringify({
-                    requisicaoId: emp.id,
-                    equipamentoId: emp.equipamentoId,
-                    patrimonio: emp.patrimonio,
-                    solicitanteNome: emp.solicitanteNome
-                  }),
-                  dataHora
-                ]
-              );
-
+              for (const emp of grupo.rawEmps) {
+                db.runSync(
+                  "UPDATE Equipamento SET statusCondicao = 'DISPONIVEL', synced = 0 WHERE id = ? OR codigoPatrimonio = ?",
+                  [emp.equipamentoId, emp.patrimonio]
+                );
+                db.runSync("UPDATE EmprestimoOffline SET synced = 1 WHERE id = ?", [emp.id]);
+                db.runSync(
+                  "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
+                  [
+                    "DEVOLUCAO",
+                    `item-${emp.id}`,
+                    JSON.stringify({
+                      requisicaoId: emp.id,
+                      equipamentoId: emp.equipamentoId,
+                      patrimonio: emp.patrimonio,
+                      solicitanteNome: emp.solicitanteNome
+                    }),
+                    dataHora
+                  ]
+                );
+              }
               syncPush().catch(() => {});
-              Alert.alert("Sucesso", `Baixa realizada! "${emp.equipamentoNome}" está de volta ao estoque.`);
+              Alert.alert("Sucesso", `Devolução realizada com sucesso para ${grupo.solicitanteNome}.`);
               carregar();
             } catch (e) {
-              console.error("Erro ao dar baixa pendente:", e);
+              console.error("Erro ao dar baixa no grupo pendente:", e);
               Alert.alert("Erro", "Não foi possível dar baixa no empréstimo.");
             }
           }
@@ -347,28 +438,30 @@ export default function EmprestimoScreen({ navigation }) {
     );
   };
 
-  const handleForcarSincronizacao = async (emp) => {
+  const handleForcarSincronizacaoGrupo = async (grupo) => {
     try {
       setSaving(true);
-      db.runSync(
-        "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
-        [
-          "EMPRESTIMO_OFFLINE",
-          emp.id,
-          JSON.stringify({
-            requisicaoId: emp.id,
-            equipamentoId: emp.equipamentoId,
-            patrimonio: emp.patrimonio,
-            solicitanteNome: emp.solicitanteNome,
-            departamento: emp.departamento,
-            dataCriacao: emp.dataCriacao
-          }),
-          emp.dataCriacao || new Date().toISOString()
-        ]
-      );
+      for (const emp of grupo.rawEmps) {
+        db.runSync(
+          "INSERT INTO OfflineLog (tipo, itemId, dados, data, synced) VALUES (?, ?, ?, ?, 0)",
+          [
+            "EMPRESTIMO_OFFLINE",
+            emp.id,
+            JSON.stringify({
+              requisicaoId: emp.id,
+              equipamentoId: emp.equipamentoId,
+              patrimonio: emp.patrimonio,
+              solicitanteNome: emp.solicitanteNome,
+              departamento: emp.departamento,
+              dataCriacao: emp.dataCriacao
+            }),
+            emp.dataCriacao || new Date().toISOString()
+          ]
+        );
+      }
       const res = await syncPush();
       if (res && res.success) {
-        Alert.alert("Sincronizado!", `Empréstimo de "${emp.equipamentoNome}" sincronizado com sucesso!`);
+        Alert.alert("Sincronizado!", `Empréstimos de "${grupo.solicitanteNome}" sincronizados com sucesso!`);
       } else {
         Alert.alert("Aviso", "Empréstimo mantido offline. Conecte-se ao servidor para sincronizar.");
       }
@@ -380,10 +473,10 @@ export default function EmprestimoScreen({ navigation }) {
     }
   };
 
-  const handleCancelarPendente = (emp) => {
+  const handleCancelarPendenteGrupo = (grupo) => {
     Alert.alert(
       "Cancelar Registro",
-      `Deseja cancelar este registro pendente? O equipamento "${emp.equipamentoNome}" voltará ao estoque disponível.`,
+      `Deseja cancelar todo o pedido de ${grupo.solicitanteNome}? Todos os ${grupo.rawEmps.length} equipamento(s) voltarão ao estoque.`,
       [
         { text: "Não", style: "cancel" },
         {
@@ -391,12 +484,12 @@ export default function EmprestimoScreen({ navigation }) {
           style: "destructive",
           onPress: () => {
             try {
-              db.runSync("UPDATE Equipamento SET statusCondicao = 'DISPONIVEL', synced = 0 WHERE id = ? OR codigoPatrimonio = ?", [emp.equipamentoId, emp.patrimonio]);
-              db.runSync("DELETE FROM EmprestimoOffline WHERE id = ?", [emp.id]);
-              db.runSync("DELETE FROM OfflineLog WHERE itemId = ? OR (tipo = 'EMPRESTIMO_OFFLINE' AND dados LIKE ?)", [emp.id, `%${emp.equipamentoId || emp.patrimonio}%`]);
-              db.runSync("DELETE FROM ItemRequisicao WHERE requisicaoId = ?", [emp.id]);
-              db.runSync("DELETE FROM Requisicao WHERE id = ?", [emp.id]);
-              Alert.alert("Cancelado", "Registro removido e equipamento liberado.");
+              for (const emp of grupo.rawEmps) {
+                db.runSync("UPDATE Equipamento SET statusCondicao = 'DISPONIVEL', synced = 0 WHERE id = ? OR codigoPatrimonio = ?", [emp.equipamentoId, emp.patrimonio]);
+                db.runSync("DELETE FROM EmprestimoOffline WHERE id = ?", [emp.id]);
+                db.runSync("DELETE FROM OfflineLog WHERE itemId = ? OR (tipo = 'EMPRESTIMO_OFFLINE' AND dados LIKE ?)", [emp.id, `%${emp.equipamentoId || emp.patrimonio}%`]);
+              }
+              Alert.alert("Cancelado", "Pedido removido e equipamentos liberados.");
               carregar();
             } catch (e) {
               console.error(e);
@@ -614,19 +707,107 @@ export default function EmprestimoScreen({ navigation }) {
               <TextInput
                 style={styles.input}
                 value={whatsapp}
-                onChangeText={setWhatsapp}
-                placeholder="Ex: (11) 99999-9999"
+                onChangeText={text => setWhatsapp(formatPhoneMask(text))}
+                placeholder="Ex: (99) 99156-1407"
                 placeholderTextColor="#94a3b8"
                 keyboardType="phone-pad"
               />
             </View>
           </View>
 
+          {/* SEÇÃO 3: LOCAL / ESPAÇO DO EVENTO (OPCIONAL) */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <MapPin size={18} color="#0284c7" />
+              <Text style={styles.sectionTitle}>Local / Espaço do Evento (Opcional)</Text>
+            </View>
+
+            <Text style={styles.inputLabel}>
+              {selectedLocal ? `Local Selecionado: ${selectedLocal.nome}` : "Selecione um local ou sala se desejar reservar o espaço:"}
+            </Text>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8, marginBottom: 4 }}>
+              <TouchableOpacity
+                style={[
+                  styles.localChip,
+                  !selectedLocal && styles.localChipActive
+                ]}
+                onPress={() => setSelectedLocal(null)}
+              >
+                <Text style={[styles.localChipText, !selectedLocal && styles.localChipTextActive]}>
+                  Sem Espaço
+                </Text>
+              </TouchableOpacity>
+
+              {locais.map(loc => {
+                const isSel = selectedLocal?.id === loc.id;
+                return (
+                  <TouchableOpacity
+                    key={loc.id}
+                    style={[styles.localChip, isSel && styles.localChipActive]}
+                    onPress={() => setSelectedLocal(loc)}
+                  >
+                    <Building2 size={13} color={isSel ? "#0284c7" : "#64748b"} style={{ marginRight: 4 }} />
+                    <Text style={[styles.localChipText, isSel && styles.localChipTextActive]}>
+                      {loc.nome}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* SEÇÃO 4: HORÁRIOS DO EVENTO (MONTAGEM, INÍCIO E TÉRMINO) */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Clock size={18} color="#4f46e5" />
+              <Text style={styles.sectionTitle}>Horários do Evento</Text>
+            </View>
+
+            <SplitDateTimeField
+              label="Montagem (Opcional)"
+              icon={Wrench}
+              value={horarioOrganizacao}
+              onChange={setHorarioOrganizacao}
+              themeColor="#d97706"
+              bgColor="#fffbeb"
+              borderColor="#fde68a"
+              textColor="#78350f"
+              allowClear={true}
+            />
+
+            <SplitDateTimeField
+              label="Início do Evento"
+              icon={Play}
+              required={true}
+              value={horarioInicio}
+              onChange={setHorarioInicio}
+              themeColor="#059669"
+              bgColor="#ecfdf5"
+              borderColor="#a7f3d0"
+              textColor="#064e3b"
+              allowClear={false}
+            />
+
+            <SplitDateTimeField
+              label="Término do Evento"
+              icon={Square}
+              required={true}
+              value={horarioTermino}
+              onChange={setHorarioTermino}
+              themeColor="#e11d48"
+              bgColor="#fff1f2"
+              borderColor="#fecdd3"
+              textColor="#881337"
+              allowClear={false}
+            />
+          </View>
+
           {/* BOTÃO CONFIRMAR */}
           <TouchableOpacity
-            style={[styles.confirmBtn, (saving || totalItensSelecionados === 0) && { opacity: 0.6 }]}
+            style={[styles.confirmBtn, (saving || (totalItensSelecionados === 0 && !selectedLocal)) && { opacity: 0.6 }]}
             onPress={handleConfirmar}
-            disabled={saving || totalItensSelecionados === 0}
+            disabled={saving || (totalItensSelecionados === 0 && !selectedLocal)}
           >
             {saving ? (
               <ActivityIndicator color="#fff" />
@@ -634,52 +815,70 @@ export default function EmprestimoScreen({ navigation }) {
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <CheckCircle size={20} color="#fff" style={{ marginRight: 8 }} />
                 <Text style={styles.confirmBtnText}>
-                  Confirmar Empréstimo ({totalItensSelecionados} {totalItensSelecionados === 1 ? "item" : "itens"})
+                  {totalItensSelecionados > 0
+                    ? `Confirmar Solicitação (${totalItensSelecionados} ${totalItensSelecionados === 1 ? "item" : "itens"}${selectedLocal ? " + Local" : ""})`
+                    : `Confirmar Reserva do Espaço (${selectedLocal?.nome})`}
                 </Text>
               </View>
             )}
           </TouchableOpacity>
 
-          {/* PENDENTES DE SYNC COM BOTÕES DE AÇÃO */}
-          {emprestimosOffline.length > 0 && (
+          {/* PENDENTES DE SYNC COM BOTÕES DE AÇÃO AGRUPADOS */}
+          {groupedPending.length > 0 && (
             <View style={styles.pendingSection}>
               <Text style={styles.pendingTitle}>
-                Empréstimos Pendentes de Sincronização ({emprestimosOffline.length})
+                Solicitações Offline Pendentes de Sync ({groupedPending.length})
               </Text>
-              {emprestimosOffline.map(emp => (
-                <View key={emp.id} style={styles.pendingCard}>
+              {groupedPending.map(grupo => (
+                <View key={grupo.id} style={styles.pendingCard}>
                   <View style={styles.pendingCardRow}>
-                    <Text style={styles.pendingEquipName} numberOfLines={1}>{emp.equipamentoNome}</Text>
+                    <Text style={styles.pendingEquipName} numberOfLines={1}>
+                      {grupo.solicitanteNome}
+                    </Text>
                     <View style={styles.pendingBadge}>
-                      <Text style={styles.pendingBadgeText}>Offline</Text>
+                      <Text style={styles.pendingBadgeText}>Offline ({grupo.rawEmps.length} itens)</Text>
                     </View>
                   </View>
-                  <Text style={styles.pendingDetail}>Patr: {emp.patrimonio}</Text>
-                  <Text style={styles.pendingDetail}>Solicitante: {emp.solicitanteNome}</Text>
-                  <Text style={styles.pendingDetail}>Depto: {emp.departamento}</Text>
-                  <Text style={styles.pendingDate}>{new Date(emp.dataCriacao).toLocaleString("pt-BR")}</Text>
 
-                  {/* AÇÕES NO EMPRÉSTIMO PENDENTE */}
+                  <Text style={styles.pendingDetail}>Depto: {grupo.departamento}</Text>
+                  
+                  {/* LISTA AGRUPADA SIMPLES DE MATERIAIS */}
+                  <View style={styles.pendingItemsList}>
+                    {grupo.itens.map(it => (
+                      <View key={it.nome} style={styles.pendingItemRow}>
+                        <Text style={styles.pendingItemBullet}>•</Text>
+                        <Text style={styles.pendingItemText}>
+                          <Text style={{ fontWeight: "700", color: "#0f172a" }}>{it.nome}</Text>: {it.total} {it.total === 1 ? "unidade" : "unidades"}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={styles.pendingDate}>
+                    Registrado em: {new Date(grupo.dataCriacao).toLocaleString("pt-BR")}
+                  </Text>
+
+                  {/* AÇÕES NO GRUPO DE EMPRÉSTIMO */}
                   <View style={styles.pendingActionsRow}>
                     <TouchableOpacity
                       style={styles.pendingActionDevolverBtn}
-                      onPress={() => handleDarBaixaPendente(emp)}
+                      onPress={() => handleDarBaixaPendenteGrupo(grupo)}
                     >
                       <CheckCircle size={14} color="#059669" style={{ marginRight: 4 }} />
-                      <Text style={styles.pendingActionDevolverText}>Dar Baixa / Devolver</Text>
+                      <Text style={styles.pendingActionDevolverText}>Dar Baixa Geral</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.pendingActionSyncBtn}
-                      onPress={() => handleForcarSincronizacao(emp)}
+                      onPress={() => handleForcarSincronizacaoGrupo(grupo)}
                     >
                       <RefreshCw size={14} color="#4f46e5" style={{ marginRight: 4 }} />
-                      <Text style={styles.pendingActionSyncText}>Reenviar Sync</Text>
+                      <Text style={styles.pendingActionSyncText}>Sync</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.pendingActionCancelBtn}
-                      onPress={() => handleCancelarPendente(emp)}
+                      onPress={() => handleCancelarPendenteGrupo(grupo)}
                     >
                       <Trash2 size={15} color="#ef4444" />
                     </TouchableOpacity>
@@ -980,6 +1179,53 @@ const styles = StyleSheet.create({
     elevation: 4
   },
   confirmBtnText: { color: "#ffffff", fontSize: 16, fontWeight: "700" },
+
+  // Chips de Locais
+  localChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f1f5f9",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 20,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    marginRight: 8
+  },
+  localChipActive: {
+    backgroundColor: "#e0f2fe",
+    borderColor: "#0284c7"
+  },
+  localChipText: { fontSize: 12, fontWeight: "600", color: "#64748b" },
+  localChipTextActive: { color: "#0369a1", fontWeight: "700" },
+
+  // Lista Agrupada de Pendentes
+  pendingItemsList: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: "#f1f5f9"
+  },
+  pendingItemRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 3
+  },
+  pendingItemBullet: {
+    color: "#6366f1",
+    fontSize: 14,
+    marginRight: 6,
+    lineHeight: 18
+  },
+  pendingItemText: {
+    fontSize: 12,
+    color: "#334155",
+    flex: 1,
+    lineHeight: 18
+  },
 
   // Pendentes Offline
   pendingSection: { marginTop: 4 },

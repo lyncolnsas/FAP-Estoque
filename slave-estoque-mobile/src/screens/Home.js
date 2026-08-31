@@ -158,9 +158,44 @@ export default function HomeScreen({ navigation, route }) {
       const cats = db.getAllSync('SELECT * FROM Categoria ORDER BY nome ASC');
       setCategorias(cats);
 
-      // 5. Requisições
-      const reqs = db.getAllSync('SELECT * FROM Requisicao ORDER BY solicitanteNome ASC');
-      setRequisicoes(reqs);
+      // 5. Requisições com itens agrupados e informações do local
+      const rawReqs = db.getAllSync(`
+        SELECT r.*, l.nome as localNome 
+        FROM Requisicao r
+        LEFT JOIN Local l ON r.localId = l.id
+        ORDER BY r.dataInicioEvento DESC
+      `);
+
+      let allItens = [];
+      try {
+        allItens = db.getAllSync(`
+          SELECT ir.*, eq.nome as equipNome, eq.statusCondicao as equipStatus 
+          FROM ItemRequisicao ir
+          JOIN Equipamento eq ON ir.equipamentoId = eq.id
+        `) || [];
+      } catch (e) {}
+
+      const reqsWithGroups = (rawReqs || []).map(r => {
+        const itensDaReq = (allItens || []).filter(i => i.requisicaoId === r.id);
+        const mapGroup = {};
+        for (const it of itensDaReq) {
+          const nome = it.equipNome || "Material";
+          if (!mapGroup[nome]) {
+            mapGroup[nome] = { nome, total: 0, avariasCount: 0 };
+          }
+          mapGroup[nome].total += 1;
+          if (it.equipStatus === 'COM_DEFEITO' || (it.observacao && (it.observacao.includes('avaria') || it.observacao.includes('defeito')))) {
+            mapGroup[nome].avariasCount += 1;
+          }
+        }
+        return {
+          ...r,
+          itensAgrupados: Object.values(mapGroup),
+          totalItensCount: itensDaReq.length
+        };
+      });
+
+      setRequisicoes(reqsWithGroups);
 
     } catch (e) {
       console.error('Erro ao carregar dados locais:', e);
@@ -348,7 +383,7 @@ export default function HomeScreen({ navigation, route }) {
           style={styles.settingsBtn} 
           onPress={() => navigation.navigate('QRScanner')}
         >
-          <Settings size={15} color="#2563eb" />
+          <QrCode size={16} color="#2563eb" />
           <Text style={styles.settingsBtnText}>Servidor</Text>
         </TouchableOpacity>
       </View>
@@ -357,21 +392,38 @@ export default function HomeScreen({ navigation, route }) {
       <View style={styles.tabContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScroll}>
           {[
-            { id: 'DASHBOARD', label: 'Painel' },
-            { id: 'ACERVO', label: 'Acervo' },
-            { id: 'AVARIAS', label: 'Avarias' },
-            { id: 'REQUISICOES', label: 'Requisições' },
-            { id: 'DEVOLUCOES', label: 'Pendentes' },
-            { id: 'ACOES', label: `Sincronizar (${offlineLogs.length})` }
+            { id: 'DASHBOARD',  label: 'Painel' },
+            { id: 'ACERVO',     label: 'Acervo' },
+            { id: 'AVARIAS',    label: 'Avarias' },
+            { id: 'REQUISICOES',label: 'Empréstimos' },
+            { id: 'DEVOLUCOES', label: 'Devoluções' },
+            { id: 'ACOES',      label: 'Fila', badge: offlineLogs.length }
           ].map(tab => (
-            <TouchableOpacity 
-              key={tab.id} 
+            <TouchableOpacity
+              key={tab.id}
               style={[styles.tabButton, activeTab === tab.id && styles.activeTabButton]}
               onPress={() => setActiveTab(tab.id)}
             >
-              <Text style={[styles.tabButtonText, activeTab === tab.id && styles.activeTabButtonText]}>
-                {tab.label}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={[styles.tabButtonText, activeTab === tab.id && styles.activeTabButtonText]}>
+                  {tab.label}
+                </Text>
+                {tab.badge > 0 && (
+                  <View style={{
+                    backgroundColor: activeTab === tab.id ? 'rgba(255,255,255,0.3)' : '#ef4444',
+                    borderRadius: 8,
+                    minWidth: 16,
+                    height: 16,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingHorizontal: 3
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
+                      {tab.badge}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -429,31 +481,41 @@ export default function HomeScreen({ navigation, route }) {
                 onPress={() => setActiveTab('REQUISICOES')}
               >
                 <Text style={styles.statNumber}>{requisicoes.length}</Text>
-                <Text style={styles.statLabel}>Requisições Ativas ›</Text>
+                <Text style={styles.statLabel}>Empréstimos Ativos ›</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Principal Actions */}
-            <Text style={styles.sectionTitle}>Operações Rápidas</Text>
+            {/* Ações Rápidas de Campo */}
+            <Text style={styles.sectionTitle}>Ações de Campo</Text>
             <View style={styles.actionGrid}>
               <TouchableOpacity 
                 style={[styles.actionCard, { backgroundColor: '#4f46e5' }]} 
                 onPress={() => navigation.navigate('BarcodeScanner', { acao: 'SEPARACAO' })}
               >
                 <View style={styles.actionIconContainer}>
-                  <Upload size={24} color="#fff" />
+                  <Upload size={22} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Liberar Item</Text>
+                <Text style={styles.actionText}>Bipar Saída</Text>
               </TouchableOpacity>
 
               <TouchableOpacity 
-                style={[styles.actionCard, { backgroundColor: '#10b981' }]} 
+                style={[styles.actionCard, { backgroundColor: '#059669' }]} 
                 onPress={() => navigation.navigate('BarcodeScanner', { acao: 'DEVOLUCAO' })}
               >
                 <View style={styles.actionIconContainer}>
-                  <Download size={24} color="#fff" />
+                  <Download size={22} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Devolver Item</Text>
+                <Text style={styles.actionText}>Bipar Devolução</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.actionCard, { backgroundColor: '#2563eb' }]} 
+                onPress={() => navigation.navigate('Emprestimo')}
+              >
+                <View style={styles.actionIconContainer}>
+                  <HandshakeIcon size={22} color="#fff" />
+                </View>
+                <Text style={styles.actionText}>Novo Empréstimo</Text>
               </TouchableOpacity>
 
               <TouchableOpacity 
@@ -461,24 +523,14 @@ export default function HomeScreen({ navigation, route }) {
                 onPress={() => navigation.navigate('BarcodeScanner', { acao: 'EDITAR' })}
               >
                 <View style={styles.actionIconContainer}>
-                  <QrCode size={24} color="#fff" />
+                  <QrCode size={22} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Escanear & Editar</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.actionCard, { backgroundColor: '#0ea5e9' }]} 
-                onPress={() => navigation.navigate('Emprestimo')}
-              >
-                <View style={styles.actionIconContainer}>
-                  <HandshakeIcon size={24} color="#fff" />
-                </View>
-                <Text style={styles.actionText}>Empréstimo</Text>
+                <Text style={styles.actionText}>Auditar / Editar QR</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Central de Cadastros Offline */}
-            <Text style={styles.sectionTitle}>Central de Cadastros (Offline)</Text>
+            {/* Cadastros Patrimoniais Offline */}
+            <Text style={styles.sectionTitle}>Cadastros Offline</Text>
             <View style={styles.cadastrosGrid}>
               <TouchableOpacity 
                 style={styles.cadastroCard}
@@ -525,36 +577,29 @@ export default function HomeScreen({ navigation, route }) {
               </TouchableOpacity>
 
               <TouchableOpacity 
-                style={styles.cadastroCard}
+                style={[styles.cadastroCard, { width: '100%' }]}
                 onPress={() => navigation.navigate('CadastrarAvaria')}
               >
-                <View style={[styles.cadastroIconBg, { backgroundColor: '#fef2f2' }]}>
-                  <Wrench size={22} color="#dc2626" />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={[styles.cadastroIconBg, { backgroundColor: '#fef2f2', marginBottom: 0 }]}>
+                    <Wrench size={22} color="#dc2626" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cadastroCardTitle}>Defeitos & Avarias</Text>
+                    <Text style={styles.cadastroCardSub}>Registrar manutenção ou danos em aparelhos</Text>
+                  </View>
                 </View>
-                <Text style={styles.cadastroCardTitle}>Defeitos & Avarias</Text>
-                <Text style={styles.cadastroCardSub}>Manutenções</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.cadastroCard}
-                onPress={() => navigation.navigate('Emprestimo')}
-              >
-                <View style={[styles.cadastroIconBg, { backgroundColor: '#fdf4ff' }]}>
-                  <HandshakeIcon size={22} color="#a855f7" />
-                </View>
-                <Text style={styles.cadastroCardTitle}>Empréstimos</Text>
-                <Text style={styles.cadastroCardSub}>Retiradas rápidas</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Sync Card */}
+            {/* Central de Sincronização */}
             <View style={styles.syncCard}>
-              <Text style={styles.syncCardTitle}>Sincronização Local</Text>
+              <Text style={styles.syncCardTitle}>Central de Sincronização</Text>
               <Text style={styles.syncCardDesc}>
-                Para baixar novas requisições e enviar as liberações ou novos cadastros feitos de forma offline.
+                Transmita operações locais para o servidor ou atualize a base de dados do estoque.
               </Text>
               {API_URL ? (
-                <Text style={styles.syncIpText}>Computador: {API_URL}</Text>
+                <Text style={styles.syncIpText}>Computador Conectado: {API_URL}</Text>
               ) : (
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
                   <AlertTriangle size={16} color="#c5221f" style={{ marginRight: 6 }} />
@@ -562,24 +607,43 @@ export default function HomeScreen({ navigation, route }) {
                 </View>
               )}
               <View style={{ flexDirection: 'column', gap: 10, marginTop: 14 }}>
+                {/* Botão Primário em Destaque */}
+                <TouchableOpacity 
+                  style={[styles.syncButton, { backgroundColor: '#7c3aed', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} 
+                  onPress={handleSyncInteligente} 
+                  disabled={syncing}
+                >
+                  <RefreshCw size={16} color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.syncButtonText}>{syncing ? 'Sincronizando...' : '⚡ Sincronizar Tudo (Geral)'}</Text>
+                </TouchableOpacity>
+
+                {/* Botões Secundários Lado a Lado */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncPushOnly} disabled={syncing}>
-                    <Upload size={16} color="#fff" style={{ marginRight: 6 }} />
-                    <Text style={styles.syncButtonText}>Enviar Sync</Text>
+                  <TouchableOpacity 
+                    style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#2563eb', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 }]} 
+                    onPress={handleSyncPushOnly} 
+                    disabled={syncing}
+                  >
+                    <Upload size={15} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={[styles.syncButtonText, { fontSize: 13 }]}>Enviar Dados</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, backgroundColor: '#10b981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncPullOnly} disabled={syncing}>
-                    <Download size={16} color="#fff" style={{ marginRight: 6 }} />
-                    <Text style={styles.syncButtonText}>Receber Sync</Text>
+                  <TouchableOpacity 
+                    style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#059669', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 }]} 
+                    onPress={handleSyncPullOnly} 
+                    disabled={syncing}
+                  >
+                    <Download size={15} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={[styles.syncButtonText, { fontSize: 13 }]}>Baixar Dados</Text>
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#8b5cf6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={handleSyncInteligente} disabled={syncing}>
-                  <RefreshCw size={16} color="#fff" style={{ marginRight: 6 }} />
-                  <Text style={styles.syncButtonText}>{syncing ? 'Processando...' : 'Sync Inteligente (Geral)'}</Text>
-                </TouchableOpacity>
+
                 {!API_URL && (
-                  <TouchableOpacity style={[styles.syncButton, { backgroundColor: '#0284c7', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} onPress={() => navigation.navigate('QRScanner')}>
+                  <TouchableOpacity 
+                    style={[styles.syncButton, { backgroundColor: '#0284c7', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 4 }]} 
+                    onPress={() => navigation.navigate('QRScanner')}
+                  >
                     <QrCode size={16} color="#fff" style={{ marginRight: 6 }} />
-                    <Text style={styles.syncButtonText}>Ler QR Code do Servidor</Text>
+                    <Text style={styles.syncButtonText}>Escanear QR Code do Servidor</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -748,68 +812,118 @@ export default function HomeScreen({ navigation, route }) {
 
         {activeTab === 'REQUISICOES' && (
           <FlatList
-            data={requisicoes.filter(r => r.status !== 'AGUARDANDO_DEVOLUCAO')}
+            data={requisicoes.filter(r => ['PENDENTE', 'AGUARDANDO', 'AGUARDANDO_SEPARACAO', 'EM_SEPARACAO', 'EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(r.status))}
             keyExtractor={item => item.id}
             contentContainerStyle={{ padding: 8, paddingBottom: 20 }}
-            renderItem={({ item }) => (
-              <View style={styles.requisicaoCard}>
-                <View style={styles.requisicaoHeader}>
-                  <Text style={styles.solicitante}>{item.solicitanteNome}</Text>
-                  <View style={[styles.badge, { backgroundColor: '#e8f0fe' }]}>
-                    <Text style={[styles.badgeText, { color: '#1a73e8' }]}>{item.status}</Text>
+            renderItem={({ item }) => {
+              const isEmprestado = ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'].includes(item.status);
+              const isEmSeparacao = item.status === 'EM_SEPARACAO';
+
+              let badgeBg = '#fef3c7';
+              let badgeColor = '#b45309';
+              let badgeLabel = 'PENDENTE';
+
+              if (isEmprestado) {
+                badgeBg = '#dcfce7';
+                badgeColor = '#15803d';
+                badgeLabel = 'EMPRESTADO';
+              } else if (isEmSeparacao) {
+                badgeBg = '#dbeafe';
+                badgeColor = '#1d4ed8';
+                badgeLabel = 'EM SEPARAÇÃO';
+              }
+
+              return (
+                <View style={styles.requisicaoCard}>
+                  <View style={styles.requisicaoHeader}>
+                    <Text style={styles.solicitante}>{item.solicitanteNome}</Text>
+                    <View style={[styles.badge, { backgroundColor: badgeBg }]}>
+                      <Text style={[styles.badgeText, { color: badgeColor }]}>{badgeLabel}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.reqDetail}>Depto: {item.departamento}</Text>
+                  
+                  {item.localNome && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                      <Building2 size={13} color="#0284c7" style={{ marginRight: 4 }} />
+                      <Text style={{ fontSize: 12, color: '#0284c7', fontWeight: '700' }}>Espaço: {item.localNome}</Text>
+                    </View>
+                  )}
+
+                  {/* MATERIAIS AGRUPADOS */}
+                  {item.itensAgrupados && item.itensAgrupados.length > 0 && (
+                    <View style={{ backgroundColor: '#f8fafc', borderRadius: 8, padding: 8, marginTop: 8, borderWidth: 1, borderColor: '#f1f5f9' }}>
+                      {item.itensAgrupados.map(g => (
+                        <View key={g.nome} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+                          <Text style={{ fontSize: 12, color: '#334155' }}>
+                            • <Text style={{ fontWeight: '700', color: '#0f172a' }}>{g.nome}</Text>: {g.total} un.
+                          </Text>
+                          {g.avariasCount > 0 && (
+                            <View style={{ backgroundColor: '#fef2f2', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, borderWidth: 1, borderColor: '#fecdd3' }}>
+                              <Text style={{ fontSize: 10, fontWeight: '700', color: '#dc2626' }}>
+                                ⚠️ {g.avariasCount} com avaria
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
+                    {!isEmprestado ? (
+                      <TouchableOpacity 
+                        style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#2563eb', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} 
+                        onPress={() => navigation.navigate('BarcodeScanner', { 
+                          acao: 'SEPARACAO', 
+                          requisicaoId: item.id, 
+                          solicitante: item.solicitanteNome 
+                        })}
+                      >
+                        <Upload size={14} color="#fff" style={{ marginRight: 6 }} />
+                        <Text style={styles.syncButtonText}>Separar / Entregar</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity 
+                        style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#059669', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]} 
+                        onPress={() => navigation.navigate('BarcodeScanner', { 
+                          acao: 'DEVOLUCAO', 
+                          requisicaoId: item.id, 
+                          solicitante: item.solicitanteNome 
+                        })}
+                      >
+                        <Download size={14} color="#fff" style={{ marginRight: 6 }} />
+                        <Text style={styles.syncButtonText}>Bipar Devolução</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, gap: 6 }}>
+                    <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#475569', paddingVertical: 7, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, 'A4')}>
+                      <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                      <Text style={[styles.syncButtonText, { fontSize: 11 }]}>Doc A4</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#475569', paddingVertical: 7, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '58mm')}>
+                      <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                      <Text style={[styles.syncButtonText, { fontSize: 11 }]}>Bobina 58mm</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, backgroundColor: '#475569', paddingVertical: 7, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '80mm')}>
+                      <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
+                      <Text style={[styles.syncButtonText, { fontSize: 11 }]}>Bobina 80mm</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
-                <Text style={styles.reqDetail}>Depto: {item.departamento}</Text>
-                
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
-                  <TouchableOpacity 
-                    style={[styles.syncButton, { flex: 1, marginTop: 0, marginRight: 6, backgroundColor: '#1a73e8' }]} 
-                    onPress={() => navigation.navigate('BarcodeScanner', { 
-                      acao: 'SEPARACAO', 
-                      requisicaoId: item.id, 
-                      solicitante: item.solicitanteNome 
-                    })}
-                  >
-                    <Text style={styles.syncButtonText}>Entrega / Separar</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={[styles.syncButton, { flex: 1, marginTop: 0, marginLeft: 6, backgroundColor: '#d97706' }]} 
-                    onPress={() => navigation.navigate('BarcodeScanner', { 
-                      acao: 'DEVOLUCAO', 
-                      requisicaoId: item.id, 
-                      solicitante: item.solicitanteNome 
-                    })}
-                  >
-                    <Text style={styles.syncButtonText}>Entrega / Retorno</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginRight: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, 'A4')}>
-                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>A4</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginHorizontal: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '58mm')}>
-                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>58mm</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.syncButton, { flex: 1, marginTop: 0, marginLeft: 4, backgroundColor: '#475569', paddingVertical: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]} onPress={() => handlePrint(item, '80mm')}>
-                    <Printer size={12} color="#fff" style={{ marginRight: 4 }} />
-                    <Text style={[styles.syncButtonText, { fontSize: 12 }]}>80mm</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
+              );
+            }}
             ListEmptyComponent={() => (
-              <Text style={styles.emptyListText}>Nenhuma requisição de empréstimo sincronizada.</Text>
+              <Text style={styles.emptyListText}>Nenhuma requisição de empréstimo ativa.</Text>
             )}
           />
         )}
 
         {activeTab === 'DEVOLUCOES' && (
           <FlatList
-            data={requisicoes.filter(r => r.status === 'AGUARDANDO_DEVOLUCAO')}
+            data={requisicoes.filter(r => ['AGUARDANDO_DEVOLUCAO', 'EMPRESTADO', 'AGUARDANDO_ACEITE'].includes(r.status))}
             keyExtractor={item => item.id}
             contentContainerStyle={{ padding: 8, paddingBottom: 20 }}
             renderItem={({ item }) => (
@@ -823,11 +937,15 @@ export default function HomeScreen({ navigation, route }) {
               >
                 <View style={styles.requisicaoHeader}>
                   <Text style={styles.solicitante}>{item.solicitanteNome}</Text>
-                  <View style={[styles.badge, { backgroundColor: '#fef3c7' }]}>
-                    <Text style={[styles.badgeText, { color: '#d97706' }]}>{item.status}</Text>
+                  <View style={[styles.badge, { backgroundColor: '#dcfce7' }]}>
+                    <Text style={[styles.badgeText, { color: '#15803d' }]}>EM USO</Text>
                   </View>
                 </View>
                 <Text style={styles.reqDetail}>Depto: {item.departamento}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                  <Download size={14} color="#059669" style={{ marginRight: 4 }} />
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669' }}>Toque para bipar devolução ›</Text>
+                </View>
               </TouchableOpacity>
             )}
             ListEmptyComponent={() => (

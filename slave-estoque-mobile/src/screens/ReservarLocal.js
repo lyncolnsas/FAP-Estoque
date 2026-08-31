@@ -8,7 +8,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { db } from "../db/database";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
 import { API_URL } from "../services/api";
-import { Calendar, Clock, Building2, User, CheckCircle, ChevronDown, X, Plus } from "lucide-react-native";
+import SplitDateTimeField from "../components/SplitDateTimeField";
+import { Calendar, Clock, Building2, User, CheckCircle, ChevronDown, X, Plus, Play, Square } from "lucide-react-native";
 
 const generateId = () => `res-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
@@ -26,9 +27,9 @@ export default function ReservarLocalScreen({ navigation }) {
   const [localSelecionado, setLocalSelecionado] = useState(null);
   const [solicitanteNome, setSolicitanteNome] = useState("");
   const [departamento, setDepartamento] = useState("");
-  const [dataEvento, setDataEvento] = useState(new Date().toISOString().split("T")[0]);
-  const [horaInicio, setHoraInicio] = useState("08:00");
-  const [horaFim, setHoraFim] = useState("12:00");
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [dataInicioReserva, setDataInicioReserva] = useState(`${todayStr}T08:00`);
+  const [dataFimReserva, setDataFimReserva] = useState(`${todayStr}T12:00`);
   const [saving, setSaving] = useState(false);
 
   const carregar = useCallback(() => {
@@ -74,8 +75,8 @@ export default function ReservarLocalScreen({ navigation }) {
     setSaving(true);
     try {
       const id = generateId();
-      const dataInicioStr = `${dataEvento}T${horaInicio}:00.000Z`;
-      const dataFimStr = `${dataEvento}T${horaFim}:00.000Z`;
+      const dataInicioStr = `${dataInicioReserva}:00.000Z`;
+      const dataFimStr = `${dataFimReserva}:00.000Z`;
 
       db.runSync(
         `INSERT INTO ReservaLocal (id, localId, usuarioId, solicitanteNome, departamento, dataInicio, dataFim, status, synced)
@@ -101,10 +102,14 @@ export default function ReservarLocalScreen({ navigation }) {
         ]
       );
 
-      Alert.alert("Reserva Confirmada!", `Espaço "${localSelecionado.nome}" reservado para ${solicitanteNome.trim()} em ${dataEvento}.`);
+      const displayDate = dataInicioReserva.split("T")[0].split("-").reverse().join("/");
+      Alert.alert("Reserva Confirmada!", `Espaço "${localSelecionado.nome}" reservado para ${solicitanteNome.trim()} em ${displayDate}.`);
       setLocalSelecionado(null);
       setSolicitanteNome("");
       setDepartamento("");
+      const today = new Date().toISOString().split("T")[0];
+      setDataInicioReserva(`${today}T08:00`);
+      setDataFimReserva(`${today}T12:00`);
       setShowModalReserva(false);
       carregar();
     } catch (e) {
@@ -230,37 +235,33 @@ export default function ReservarLocalScreen({ navigation }) {
                 autoCapitalize="words"
               />
 
-              {/* DATA E HORÁRIOS */}
-              <Text style={styles.inputLabel}>Data do Evento (AAAA-MM-DD)</Text>
-              <TextInput
-                style={styles.input}
-                value={dataEvento}
-                onChangeText={setDataEvento}
-                placeholder="2026-08-25"
-                placeholderTextColor="#94a3b8"
-              />
+              {/* DATA E HORÁRIOS COM CALENDÁRIO */}
+              <View style={{ marginTop: 14 }}>
+                <SplitDateTimeField
+                  label="Início da Reserva"
+                  icon={Play}
+                  required={true}
+                  value={dataInicioReserva}
+                  onChange={setDataInicioReserva}
+                  themeColor="#059669"
+                  bgColor="#ecfdf5"
+                  borderColor="#a7f3d0"
+                  textColor="#064e3b"
+                  allowClear={false}
+                />
 
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Início</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={horaInicio}
-                    onChangeText={setHoraInicio}
-                    placeholder="08:00"
-                    placeholderTextColor="#94a3b8"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Término</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={horaFim}
-                    onChangeText={setHoraFim}
-                    placeholder="12:00"
-                    placeholderTextColor="#94a3b8"
-                  />
-                </View>
+                <SplitDateTimeField
+                  label="Término da Reserva"
+                  icon={Square}
+                  required={true}
+                  value={dataFimReserva}
+                  onChange={setDataFimReserva}
+                  themeColor="#e11d48"
+                  bgColor="#fff1f2"
+                  borderColor="#fecdd3"
+                  textColor="#881337"
+                  allowClear={false}
+                />
               </View>
 
               <TouchableOpacity

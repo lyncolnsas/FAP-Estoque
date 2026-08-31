@@ -63,6 +63,16 @@ $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
 # Executar o build via Electron-Builder
 npx electron-builder --config electron-builder.json
 
+# Copiar para a raiz D:\QT se gerado
+$SetupSrc = Join-Path $ScriptDir "dist\Painel FAP Setup 1.0.0.exe"
+if (-not (Test-Path $SetupSrc)) {
+    $SetupSrc = Get-ChildItem (Join-Path $ScriptDir "dist") -Filter "*.exe" | Select-Object -First 1 -ExpandProperty FullName
+}
+if ($SetupSrc -and (Test-Path $SetupSrc)) {
+    Copy-Item $SetupSrc (Join-Path $RootDir "Painel_FAP_Setup.exe") -Force
+    Write-Host " Copiado para a raiz: $RootDir\Painel_FAP_Setup.exe" -ForegroundColor Green
+}
+
 Write-Host "`n=========================================" -ForegroundColor Green
 Write-Host " SUCESSO! O arquivo .exe foi gerado em:" -ForegroundColor Green
 Write-Host " $ScriptDir\dist\" -ForegroundColor Cyan

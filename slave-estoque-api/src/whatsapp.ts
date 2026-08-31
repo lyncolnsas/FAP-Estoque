@@ -131,6 +131,57 @@ export class WhatsappSpecialist {
     this.sock = null;
   }
 
+  /**
+   * Normaliza e resolve o JID exato registrado nos servidores do WhatsApp,
+   * tratando números brasileiros com/sem o 9º dígito e com/sem DDI 55.
+   */
+  public async resolveJid(jidOrPhone: string): Promise<string | null> {
+    if (!jidOrPhone) return null;
+    let clean = jidOrPhone.trim();
+    if (!clean.includes('@')) {
+      let digits = clean.replace(/\D/g, '');
+      if (digits.length < 8) return null;
+      if (digits.length === 10 || digits.length === 11) {
+        digits = '55' + digits;
+      }
+      clean = `${digits}@s.whatsapp.net`;
+    }
+
+    if (!this.sock) return clean;
+
+    try {
+      // 1. Tenta encontrar no WhatsApp o JID direto
+      const check1 = await this.sock.onWhatsApp(clean);
+      if (check1 && check1.length > 0 && check1[0]?.exists) {
+        return check1[0].jid;
+      }
+
+      // 2. Se for número brasileiro com 9 dígitos (ex: 5511999998888@s.whatsapp.net), tenta sem o 9 (551199998888@s.whatsapp.net)
+      const matchBr9 = clean.match(/^55(\d{2})9(\d{8})@s\.whatsapp\.net$/);
+      if (matchBr9) {
+        const altJid = `55${matchBr9[1]}${matchBr9[2]}@s.whatsapp.net`;
+        const check2 = await this.sock.onWhatsApp(altJid);
+        if (check2 && check2.length > 0 && check2[0]?.exists) {
+          return check2[0].jid;
+        }
+      }
+
+      // 3. Se for número brasileiro com 8 dígitos (ex: 551199998888@s.whatsapp.net), tenta com o 9 (5511999998888@s.whatsapp.net)
+      const matchBr8 = clean.match(/^55(\d{2})(\d{8})@s\.whatsapp\.net$/);
+      if (matchBr8) {
+        const altJid = `55${matchBr8[1]}9${matchBr8[2]}@s.whatsapp.net`;
+        const check3 = await this.sock.onWhatsApp(altJid);
+        if (check3 && check3.length > 0 && check3[0]?.exists) {
+          return check3[0].jid;
+        }
+      }
+    } catch (e) {
+      // Silenciosamente continua com o clean formatado
+    }
+
+    return clean;
+  }
+
   public async sendMessage(toJid: string, content: string) {
     if (!this.sock) {
       console.log('[WhatsApp] Erro: Socket não conectado.');
@@ -138,10 +189,16 @@ export class WhatsappSpecialist {
     }
     
     try {
-      await this.sock.sendPresenceUpdate('composing', toJid);
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulando digitação
+      const targetJid = await this.resolveJid(toJid);
+      if (!targetJid) {
+        console.warn('[WhatsApp] Destinatário inválido:', toJid);
+        return false;
+      }
+
+      await this.sock.sendPresenceUpdate('composing', targetJid);
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulando digitação
       
-      await this.sock.sendMessage(toJid, { text: content });
+      await this.sock.sendMessage(targetJid, { text: content });
       return true;
     } catch (err) {
       console.error('[WhatsApp] Erro ao enviar mensagem:', err);
@@ -156,22 +213,29 @@ export class WhatsappSpecialist {
     }
     
     try {
-      await this.sock.sendPresenceUpdate('composing', toJid);
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulando digitação
+      const targetJid = await this.resolveJid(toJid);
+      if (!targetJid) {
+        console.warn('[WhatsApp] Destinatário inválido:', toJid);
+        return false;
+      }
+
+      await this.sock.sendPresenceUpdate('composing', targetJid);
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulando digitação
       
       let imagePayload: any;
       if (imageUrl.startsWith('/uploads/')) {
-        const filePath = path.join(__dirname, '..', imageUrl);
+        const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+        const filePath = path.join(uploadDir, path.basename(imageUrl));
         if (fs.existsSync(filePath)) {
           imagePayload = fs.readFileSync(filePath);
         } else {
-          imagePayload = { url: imageUrl }; // fallback
+          imagePayload = { url: imageUrl };
         }
       } else {
         imagePayload = { url: imageUrl };
       }
 
-      await this.sock.sendMessage(toJid, { image: imagePayload, caption });
+      await this.sock.sendMessage(targetJid, { image: imagePayload, caption });
       return true;
     } catch (err) {
       console.error('[WhatsApp] Erro ao enviar mensagem com mídia:', err);
@@ -193,17 +257,67 @@ export class WhatsappSpecialist {
       }));
   }
 
+  /**
+   * Busca a foto de perfil do contato no WhatsApp, baixa o arquivo para a pasta de uploads
+   * do servidor para garantir persistência (evitando expiração de CDN) e retorna a URL local /uploads/...
+   */
   public async getProfilePictureUrl(jidOrPhone: string): Promise<string | null> {
     if (!this.sock) return null;
     try {
-      let jid = jidOrPhone.trim();
-      if (!jid.includes('@')) {
-        const clean = jid.replace(/\D/g, '');
-        if (clean.length < 8) return null;
-        jid = `${clean}@s.whatsapp.net`;
+      const jid = await this.resolveJid(jidOrPhone);
+      if (!jid) return null;
+
+      // Lista de possíveis JIDs para testar (com e sem nono dígito)
+      const candidateJids: string[] = [jid];
+      const matchBr9 = jid.match(/^55(\d{2})9(\d{8})@s\.whatsapp\.net$/);
+      if (matchBr9) {
+        candidateJids.push(`55${matchBr9[1]}${matchBr9[2]}@s.whatsapp.net`);
       }
-      const url = await this.sock.profilePictureUrl(jid, 'image');
-      return url || null;
+      const matchBr8 = jid.match(/^55(\d{2})(\d{8})@s\.whatsapp\.net$/);
+      if (matchBr8) {
+        candidateJids.push(`55${matchBr8[1]}9${matchBr8[2]}@s.whatsapp.net`);
+      }
+
+      let remoteUrl: string | null = null;
+      for (const targetJid of candidateJids) {
+        // Tenta qualidade HD/alta primeiro
+        try {
+          remoteUrl = await this.sock.profilePictureUrl(targetJid, 'image');
+          if (remoteUrl) break;
+        } catch (e) {}
+
+        // Se não conseguir 'image', tenta 'preview' (thumbnail padrão)
+        try {
+          remoteUrl = await this.sock.profilePictureUrl(targetJid, 'preview');
+          if (remoteUrl) break;
+        } catch (e) {}
+      }
+
+      if (!remoteUrl) return null;
+
+      // Baixa e persiste a foto localmente para evitar expiração do link do WhatsApp CDN
+      if (remoteUrl.startsWith('http')) {
+        try {
+          const cleanDigits = jid.replace(/\D/g, '');
+          const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+          const filename = `perfil-wa-${cleanDigits}.jpg`;
+          const targetPath = path.join(uploadDir, filename);
+
+          const resp = await fetch(remoteUrl);
+          if (resp.ok) {
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            fs.writeFileSync(targetPath, buffer);
+            return `/uploads/${filename}`;
+          }
+        } catch (dlErr) {
+          console.warn('[WhatsApp] Aviso: Não foi possível salvar foto localmente, utilizando URL direta:', dlErr);
+        }
+      }
+
+      return remoteUrl || null;
     } catch (e) {
       return null;
     }

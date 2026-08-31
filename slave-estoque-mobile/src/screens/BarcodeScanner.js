@@ -5,6 +5,7 @@ import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { InteractionManager } from 'react-native';
 import { db } from '../db/database';
 import { API_URL, syncPush } from '../services/api';
+import { formatPhoneMask } from '../utils/formatters';
 
 const { width } = Dimensions.get('window');
 const scannerSize = width * 0.75;
@@ -492,11 +493,11 @@ export default function BarcodeScannerScreen({ route, navigation }) {
                 />
                 <TextInput
                   style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, color: '#1e293b', marginBottom: 12 }}
-                  placeholder="WhatsApp (ex: 11999999999)"
+                  placeholder="WhatsApp (ex: (99) 99156-1407)"
                   placeholderTextColor="#94a3b8"
                   keyboardType="phone-pad"
                   value={novoWhatsApp}
-                  onChangeText={setNovoWhatsApp}
+                  onChangeText={text => setNovoWhatsApp(formatPhoneMask(text))}
                 />
               </View>
             ) : (

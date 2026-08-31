@@ -13,9 +13,12 @@ export interface AuthRequest extends Request {
   };
 }
 
-export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
+export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
+  if (!authHeader) {
+    res.status(401).json({ error: 'Token não fornecido' });
+    return;
+  }
 
   const [, token] = authHeader.split(' ');
 
@@ -24,15 +27,20 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     req.user = payload;
     next();
   } catch (error) {
-    return res.status(401).json({ error: 'Token inválido' });
+    res.status(401).json({ error: 'Token inválido' });
+    return;
   }
 }
 
 export function authRole(roles: string[]) {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ error: 'Não autenticado' });
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Não autenticado' });
+      return;
+    }
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Acesso negado para o seu perfil' });
+      res.status(403).json({ error: 'Acesso negado para o seu perfil' });
+      return;
     }
     next();
   };

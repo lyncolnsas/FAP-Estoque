@@ -65,6 +65,44 @@ configRoutes.post('/whatsapp/desconectar', authMiddleware, authRole(['ADMIN']), 
   }
 });
 
+configRoutes.post('/whatsapp/teste', authMiddleware, authRole(['ADMIN']), async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: 'Informe o número do telefone com DDD.' });
+    }
+
+    const testMsg = message || `👋 *FAP Estoque - Teste de Conexão WhatsApp*\n\nEste é um teste de mensagem enviado com sucesso pelo robô do FAP Estoque em ${new Date().toLocaleString('pt-BR')}! 🚀`;
+    const enviado = await whatsapp.sendMessage(phone, testMsg);
+
+    if (enviado) {
+      return res.json({ success: true, message: 'Mensagem de teste enviada com sucesso!' });
+    } else {
+      return res.status(500).json({ error: 'Falha ao enviar mensagem. Verifique se o WhatsApp está conectado e o número é válido.' });
+    }
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Erro ao enviar mensagem de teste' });
+  }
+});
+
+configRoutes.post('/whatsapp/buscar-foto', authMiddleware, authRole(['ADMIN']), async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: 'Informe o número do telefone com DDD.' });
+    }
+
+    const fotoUrl = await whatsapp.getProfilePictureUrl(phone);
+    if (fotoUrl) {
+      return res.json({ success: true, fotoUrl, message: 'Foto de perfil encontrada com sucesso!' });
+    } else {
+      return res.status(404).json({ error: 'Foto não encontrada ou perfil privado no WhatsApp.' });
+    }
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Erro ao buscar foto no WhatsApp' });
+  }
+});
+
 // --- SYNC PASSWORD ---
 configRoutes.get('/sync-password', authMiddleware, authRole(['ADMIN']), async (req, res) => {
   try {

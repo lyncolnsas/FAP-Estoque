@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 
 import { api } from '../lib/api';
 import { toast } from 'sonner';
+import { formatPhoneMask } from '../lib/utils';
 
 interface Local {
   id: string;
@@ -732,7 +733,7 @@ export default function CalendarioSolicitacoes() {
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp (com DDD) (Opcional)</label>
-                            <input type="text" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(e.target.value)} placeholder="Ex: 11999999999" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
+                            <input type="text" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(formatPhoneMask(e.target.value))} placeholder="Ex: (99) 99156-1407" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
                           </div>
                         </div>
                       )}
@@ -740,7 +741,7 @@ export default function CalendarioSolicitacoes() {
                       {targetUserId !== '' && targetUserId !== 'EXTERNAL' && targetUserId !== 'SELF' && (
                         <div className="bg-white p-4 border border-blue-100 rounded-xl">
                           <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp de Contato (Opcional)</label>
-                          <input type="text" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(e.target.value)} placeholder="Ex: 11999999999" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
+                          <input type="text" value={solicitanteWhatsapp} onChange={e => setSolicitanteWhatsapp(formatPhoneMask(e.target.value))} placeholder="Ex: (99) 99156-1407" className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3" />
                         </div>
                       )}
                     </div>

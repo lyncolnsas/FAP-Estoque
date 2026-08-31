@@ -1,14 +1,7 @@
-import { type ClassValue, clsx } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
-
 /**
- * Formata dinamicamente um telefone brasileiro no formato (99) 99999-9999 ou (99) 9999-9999
+ * Formata dinamicamente um telefone brasileiro no formato (99) 99156-1407 ou (99) 9999-9999
  */
-export function formatPhoneMask(value: string): string {
+export function formatPhoneMask(value) {
   if (!value) return '';
   const digits = value.replace(/\D/g, '').slice(0, 11);
   if (digits.length <= 2) {
@@ -22,4 +15,3 @@ export function formatPhoneMask(value: string): string {
   }
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
-

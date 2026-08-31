@@ -20,6 +20,7 @@ android/app/build/
 ios/build/
 *.apk
 *.aab
+*.exe
 
 # Logs e Misc
 npm-debug.log
@@ -30,3 +31,4 @@ yarn-error.log
 # Test Apps
 test-app/
 test-app2/
+test-login.js

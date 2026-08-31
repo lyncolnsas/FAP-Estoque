@@ -13,6 +13,7 @@ import categoriasRoutes from './routes/categorias.routes';
 import syncRoutes from './routes/sync.routes';
 import path from 'path';
 import { sendEmail } from './email';
+import { notificarEntregaEquipamentos, notificarDevolucaoEquipamentos, iniciarAgendadorLembretes } from './notifications';
 
 const app = express();
 app.use(cors());
@@ -271,7 +272,7 @@ app.get('/equipamentos/:codigo/info', async (req, res) => {
       itensRequisicao: {
         where: {
           requisicao: {
-            status: { in: ['EMPRESTADO', 'AGUARDANDO_ACEITE'] }
+            status: { in: ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE', 'EM_SEPARACAO'] }
           }
         },
         include: {
@@ -599,7 +600,11 @@ app.post('/requisicoes/:id/receber', authMiddleware, authRole(['SETOR']), async 
     // Atualiza status da requisição
     const updatedReq = await prisma.requisicao.update({
       where: { id },
-      data: { status: 'EMPRESTADO' }
+      data: { 
+        status: 'EMPRESTADO',
+        dataEntrega: reqDb.dataEntrega || new Date(),
+        operadorEntrega: reqDb.operadorEntrega || (req as any).user?.nome || 'Solicitante'
+      }
     });
 
     res.json({ success: true, requisicao: updatedReq, message: 'Recebimento confirmado com sucesso!' });
@@ -638,15 +643,15 @@ app.post('/requisicoes/:id/entregar-manualmente', authMiddleware, authRole(['EST
     // Atualiza status da requisição
     const updatedReq = await prisma.requisicao.update({
       where: { id },
-      data: { status: 'EMPRESTADO' }
+      data: { 
+        status: 'EMPRESTADO',
+        dataEntrega: new Date(),
+        operadorEntrega: (req as any).user?.nome || 'Estoquista'
+      }
     });
 
-    if (reqDb.solicitanteWhatsapp) {
-      const num = reqDb.solicitanteWhatsapp.replace(/\D/g, '') + '@s.whatsapp.net';
-      const nomesEquipamentos = reqDb.itens.map((i: any) => i.equipamento?.nome).filter(Boolean).join('\n- ');
-      const msg = `📦 *Sua requisição de equipamentos acaba de ser entregue!*\n\nOlá, ${reqDb.solicitanteNome}. Os seguintes itens foram entregues para você:\n- ${nomesEquipamentos}\n\nPor favor, cuide bem dos aparelhos e bom evento!`;
-      whatsapp.sendMessage(num, msg).catch(console.error);
-    }
+    // Notificação WhatsApp e Email especializada de entrega
+    await notificarEntregaEquipamentos(id).catch(err => console.error('Erro ao notificar entrega manual:', err));
 
     res.json({ success: true, requisicao: updatedReq, message: 'Entregue com sucesso!' });
   } catch (error) {
@@ -724,21 +729,15 @@ app.post('/requisicoes/:id/separar', authMiddleware, authRole(['ESTOQUISTA', 'AD
     if (todosSeparados && reqDb?.status === "EM_SEPARACAO") {
       await prisma.requisicao.update({ 
         where: { id }, 
-        data: { status: "AGUARDANDO_DEVOLUCAO" } 
+        data: { 
+          status: "AGUARDANDO_DEVOLUCAO",
+          dataEntrega: reqDb?.dataEntrega || new Date(),
+          operadorEntrega: reqDb?.operadorEntrega || (req as any).user?.nome || 'Estoquista'
+        } 
       });
       
-      const itensReq = await prisma.itemRequisicao.findMany({ where: { requisicaoId: id }, include: { equipamento: true } });
-      const nomesEquipamentos = itensReq.map(i => i.equipamento.nome).join('\n- ');
-
-      if (reqDb?.solicitanteWhatsapp) {
-        const num = reqDb.solicitanteWhatsapp.replace(/\D/g, '') + '@s.whatsapp.net';
-        const msg = `📦 *Sua requisição de equipamentos acaba de ser entregue!*\n\nOlá, ${reqDb.solicitanteNome}. Os seguintes itens foram separados/entregues para você:\n- ${nomesEquipamentos}\n\nPor favor, cuide bem dos aparelhos!`;
-        await whatsapp.sendMessage(num, msg);
-      }
-      
-      if (reqDb?.solicitanteEmail) {
-        await sendEmail(reqDb.solicitanteEmail, 'Equipamentos Prontos para Retirada', `Olá, ${reqDb.solicitanteNome}!\n\nOs equipamentos solicitados já foram separados e entregues.\n\nAtenciosamente,\nEquipe Slave Estoque`);
-      }
+      // Notificação WhatsApp e Email de entrega concluída
+      await notificarEntregaEquipamentos(id).catch(err => console.error('Erro ao notificar entrega pós-separação:', err));
     }
 
     res.json({ success: true, item: itemAtualizado, message: isExtra ? `Item extra '${equipamento.nome}' adicionado e separado!` : `Item '${equipamento.nome}' separado!` });
@@ -766,7 +765,11 @@ app.post('/requisicoes/aceite/:token', async (req, res) => {
 
   await prisma.requisicao.update({
     where: { id: reqDb.id },
-    data: { status: 'EMPRESTADO' }
+    data: { 
+      status: 'EMPRESTADO',
+      dataEntrega: reqDb.dataEntrega || new Date(),
+      operadorEntrega: reqDb.operadorEntrega || 'Aceite Digital'
+    }
   });
 
   for (const item of reqDb.itens) {
@@ -775,6 +778,9 @@ app.post('/requisicoes/aceite/:token', async (req, res) => {
       data: { statusCondicao: 'EMPRESTADO', quantidadeUso: { increment: 1 } }
     });
   }
+
+  // Notifica entrega pós-aceite
+  await notificarEntregaEquipamentos(reqDb.id).catch(err => console.error('Erro ao notificar entrega pós-aceite:', err));
 
   res.json({ success: true, message: 'Empréstimo liberado com sucesso!' });
 });
@@ -817,27 +823,24 @@ app.post('/requisicoes/:id/devolver', authMiddleware, authRole(['ESTOQUISTA', 'A
       });
     }
 
-      const reqDb = await prisma.requisicao.findUnique({ where: { id }, include: { itens: true } });
+    const reqDb = await prisma.requisicao.findUnique({ where: { id }, include: { itens: true } });
+    
+    const itensSeparados = reqDb?.itens.filter(i => i.statusSeparacao) || [];
+    const todosDevolvidos = itensSeparados.length > 0 && itensSeparados.every(i => i.id === item.id ? true : i.statusDevolucao);
+    
+    if (todosDevolvidos) {
+      await prisma.requisicao.update({ 
+        where: { id }, 
+        data: { 
+          status: "DEVOLVIDO",
+          dataDevolucao: new Date(),
+          operadorDevolucao: (req as any).user?.nome || 'Estoquista'
+        } 
+      });
       
-      const itensSeparados = reqDb?.itens.filter(i => i.statusSeparacao) || [];
-      const todosDevolvidos = itensSeparados.length > 0 && itensSeparados.every(i => i.id === item.id ? true : i.statusDevolucao);
-      
-      if (todosDevolvidos) {
-        await prisma.requisicao.update({ where: { id }, data: { status: "DEVOLVIDO" } });
-        
-        const countAvarias = await prisma.historicoAvaria.count({ where: { requisicaoId: id } });
-        const observacaoAvaria = (countAvarias > 0 || avaria) ? " Observamos que houve relato de avaria, defeito ou pendência em algum(ns) dos itens devolvidos." : "";
-
-        if (reqDb?.solicitanteWhatsapp) {
-          const num = reqDb.solicitanteWhatsapp.replace(/\D/g, '') + '@s.whatsapp.net';
-          const msg = `Olá, ${reqDb.solicitanteNome}! Recebemos os equipamentos de volta.${observacaoAvaria} Agradecemos pelo cuidado e até a próxima!`;
-          await whatsapp.sendMessage(num, msg);
-        }
-        
-        if (reqDb?.solicitanteEmail) {
-          await sendEmail(reqDb.solicitanteEmail, 'Equipamentos Devolvidos com Sucesso', `Olá, ${reqDb.solicitanteNome}!\n\nConfirmamos o recebimento e devolução dos equipamentos solicitados.${observacaoAvaria ? '\n' + observacaoAvaria : ''}\n\nAgradecemos pelo cuidado e até a próxima!\n\nAtenciosamente,\nEquipe Slave Estoque`);
-        }
-      }
+      // Notificação WhatsApp e Email especializada de devolução com/sem avarias
+      await notificarDevolucaoEquipamentos(id).catch(err => console.error('Erro ao notificar devolução:', err));
+    }
 
     res.json(itemAtualizado);
   } catch (error) {
@@ -850,6 +853,8 @@ app.post('/requisicoes/:id/finalizar-devolucao', authMiddleware, authRole(['ESTO
     const id = req.params.id as string;
     const { itensProcessados } = req.body;
     // itensProcessados: { codigoPatrimonio: string, devolvido: boolean, avaria: boolean, descricaoAvaria?: string, tipoAvariaId?: string }[]
+
+    const avariasRegistradas: Array<{ equipamentoNome: string; codigoPatrimonio: string; descricao: string }> = [];
 
     for (const itemProc of (itensProcessados || [])) {
       const equip = await prisma.equipamento.findUnique({ where: { codigoPatrimonio: itemProc.codigoPatrimonio } });
@@ -872,33 +877,45 @@ app.post('/requisicoes/:id/finalizar-devolucao', authMiddleware, authRole(['ESTO
         });
 
         if (itemProc.avaria) {
+          const descAvaria = itemProc.descricaoAvaria || 'Avaria registrada na devolução.';
           await prisma.historicoAvaria.create({
             data: {
               equipamentoId: equip.id,
               requisicaoId: id,
               tipoAvariaId: itemProc.tipoAvariaId || null,
-              descricao: itemProc.descricaoAvaria || 'Avaria registrada na devolução.',
+              descricao: descAvaria,
               resolvido: false
             }
+          });
+          avariasRegistradas.push({
+            equipamentoNome: equip.nome,
+            codigoPatrimonio: equip.codigoPatrimonio,
+            descricao: descAvaria
           });
         }
       } else {
         // Faltante!
+        const descFalta = `ITEM FALTANTE NA DEVOLUÇÃO: ${itemProc.descricaoAvaria || 'Não devolvido'}`;
         await prisma.itemRequisicao.update({
           where: { id: item.id },
           data: { statusDevolucao: true, observacao: `FALTANTE: ${itemProc.descricaoAvaria || 'Não devolvido'}` }
         });
         await prisma.equipamento.update({
           where: { id: equip.id },
-          data: { statusCondicao: 'COM_DEFEITO' } // Tratar como defeito para não ser emprestado
+          data: { statusCondicao: 'COM_DEFEITO' }
         });
         await prisma.historicoAvaria.create({
           data: {
             equipamentoId: equip.id,
             requisicaoId: id,
-            descricao: `ITEM FALTANTE NA DEVOLUÇÃO: ${itemProc.descricaoAvaria || 'Não devolvido'}`,
+            descricao: descFalta,
             resolvido: false
           }
+        });
+        avariasRegistradas.push({
+          equipamentoNome: equip.nome,
+          codigoPatrimonio: equip.codigoPatrimonio,
+          descricao: descFalta
         });
       }
     }
@@ -906,8 +923,18 @@ app.post('/requisicoes/:id/finalizar-devolucao', authMiddleware, authRole(['ESTO
     // Finalizar a requisição
     const reqDb = await prisma.requisicao.findUnique({ where: { id } });
     if (reqDb) {
-      await prisma.requisicao.update({ where: { id }, data: { status: "DEVOLVIDO" } });
-      // Podemos enviar mensagem de whatsapp geral aqui, se desejado.
+      await prisma.requisicao.update({ 
+        where: { id }, 
+        data: { 
+          status: "DEVOLVIDO",
+          dataDevolucao: new Date(),
+          operadorDevolucao: (req as any).user?.nome || 'Estoquista'
+        } 
+      });
+      
+      // Notificação WhatsApp e Email de devolução com/sem avarias
+      await notificarDevolucaoEquipamentos(id, avariasRegistradas.length > 0 ? avariasRegistradas : undefined)
+        .catch(err => console.error('Erro ao notificar devolução em lote:', err));
     }
 
     res.json({ success: true, message: 'Devolução finalizada em lote com sucesso' });
@@ -923,8 +950,8 @@ app.post('/requisicoes/:id/devolver-manualmente', authMiddleware, authRole(['EST
     const reqDb = await prisma.requisicao.findUnique({ where: { id }, include: { itens: true } });
     if (!reqDb) return res.status(404).json({ error: 'Requisição não encontrada' });
     
-    if (reqDb.status !== 'EMPRESTADO') {
-      return res.status(400).json({ error: 'Apenas requisições com status EMPRESTADO podem ser devolvidas.' });
+    if (!['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE', 'EM_SEPARACAO'].includes(reqDb.status)) {
+      return res.status(400).json({ error: 'Apenas requisições ativas ou entregues podem ser devolvidas.' });
     }
 
     // Atualiza todos os itens para devolvido e disponíveis
@@ -945,14 +972,17 @@ app.post('/requisicoes/:id/devolver-manualmente', authMiddleware, authRole(['EST
     }
 
     // Finalizar a requisição
-    const updatedReq = await prisma.requisicao.update({ where: { id }, data: { status: "DEVOLVIDO" } });
+    const updatedReq = await prisma.requisicao.update({ 
+      where: { id }, 
+      data: { 
+        status: "DEVOLVIDO",
+        dataDevolucao: new Date(),
+        operadorDevolucao: (req as any).user?.nome || 'Estoquista'
+      } 
+    });
 
-    if (reqDb.solicitanteWhatsapp) {
-      const num = reqDb.solicitanteWhatsapp.replace(/\D/g, '') + '@s.whatsapp.net';
-      const nomesEquipamentos = reqDb.itens.map((i: any) => i.equipamento?.nome).filter(Boolean).join('\n- ');
-      const msg = `✅ *Devolução concluída!*\n\nOlá, ${reqDb.solicitanteNome}. Os seguintes itens foram devolvidos ao estoque com sucesso:\n- ${nomesEquipamentos}\n\nObrigado!`;
-      whatsapp.sendMessage(num, msg).catch(console.error);
-    }
+    // Notificação WhatsApp e Email
+    await notificarDevolucaoEquipamentos(id).catch(err => console.error('Erro ao notificar devolução manual:', err));
 
     res.json({ success: true, requisicao: updatedReq, message: 'Materiais recebidos com sucesso!' });
   } catch (error) {
@@ -1011,7 +1041,7 @@ app.get('/dashboard/metrics', authMiddleware, authRole(['ADMIN']), async (req, r
 
     const pendingReturns = await prisma.requisicao.findMany({
       where: {
-        status: { in: ['EMPRESTADO', 'AGUARDANDO_ACEITE'] }
+        status: { in: ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'AGUARDANDO_ACEITE'] }
       },
       include: {
         usuario: true,
@@ -1065,84 +1095,6 @@ app.delete('/database/limpar-pedidos', authMiddleware, authRole(['ADMIN']), asyn
   }
 });
 
-// --- ROTINA DE LEMBRETE DE DEVOLUÇÃO NO WHATSAPP (A CADA 1 MIN) ---
-setInterval(async () => {
-  try {
-    const agora = new Date();
-    // Procurar por requisições cujo término seja daqui a 5 minutos (margem de 1 minuto)
-    const alvoInicio = new Date(agora.getTime() + 4 * 60 * 1000 + 30 * 1000); // 4m30s
-    const alvoFim = new Date(agora.getTime() + 5 * 60 * 1000 + 30 * 1000); // 5m30s
-
-    const requisicoesParaLembrar = await prisma.requisicao.findMany({
-      where: {
-        status: 'EMPRESTADO',
-        lembreteDevolucaoEnviado: false,
-        dataFimEvento: {
-          gte: alvoInicio,
-          lte: alvoFim
-        }
-      },
-      include: {
-        itens: {
-          include: {
-            equipamento: true
-          }
-        }
-      }
-    });
-
-    for (const req of requisicoesParaLembrar) {
-      if (!req.solicitanteWhatsapp) continue;
-
-      let msgEquipamentos = '';
-      
-      for (const item of req.itens) {
-        // Encontra o próximo uso DESTE equipamento ESPECÍFICO depois do término da atual
-        const proximoUso = await prisma.itemRequisicao.findFirst({
-          where: {
-            equipamentoId: item.equipamento.id,
-            requisicao: {
-              status: { in: ['APROVADA', 'AGUARDANDO_SEPARACAO', 'PENDENTE'] },
-              dataInicioEvento: {
-                gte: req.dataFimEvento
-              }
-            }
-          },
-          include: {
-            requisicao: true
-          },
-          orderBy: {
-            requisicao: {
-              dataInicioEvento: 'asc'
-            }
-          }
-        });
-
-        if (proximoUso) {
-          const proximoNome = proximoUso.requisicao.solicitanteNome;
-          const proximaHora = proximoUso.requisicao.dataInicioEvento.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-          msgEquipamentos += `- ${item.equipamento.nome}: A próxima a usar será ${proximoNome} às ${proximaHora}\n`;
-        } else {
-          msgEquipamentos += `- ${item.equipamento.nome}: Livre, sem uso previsto para logo depois.\n`;
-        }
-      }
-
-      const num = req.solicitanteWhatsapp.replace(/\D/g, '') + '@s.whatsapp.net';
-      const msg = `⏳ *Lembrete de Devolução* ⏳\nOlá ${req.solicitanteNome}, faltam 5 minutos para acabar o seu tempo de uso dos seguintes equipamentos:\n\n${msgEquipamentos}\nSe o seu uso for se estender, por favor nos avise agora respondendo esta mensagem!`;
-
-      await whatsapp.sendMessage(num, msg);
-
-      // Marca como enviado para não repetir
-      await prisma.requisicao.update({
-        where: { id: req.id },
-        data: { lembreteDevolucaoEnviado: true }
-      });
-    }
-  } catch (error) {
-    console.error('[CRON] Erro ao processar lembretes de devolução:', error);
-  }
-}, 60000);
-
 const PORT = process.env.PORT || 3333;
 
 async function bootstrap() {
@@ -1169,8 +1121,9 @@ async function bootstrap() {
   app.listen(PORT as number, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
     whatsapp.connect();
+    // Inicia agendador de lembretes automáticos de devolução
+    iniciarAgendadorLembretes();
   });
 }
 
 bootstrap();
-

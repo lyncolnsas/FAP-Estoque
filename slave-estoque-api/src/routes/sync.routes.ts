@@ -6,6 +6,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { whatsapp } from '../whatsapp';
+import { notificarEntregaEquipamentos, notificarDevolucaoEquipamentos } from '../notifications';
 
 const router = Router();
 
@@ -69,18 +70,20 @@ function getLocalIpAddresses(): string[] {
 }
 
 // Middleware de Proteção por Palavra Passe
-async function checkSyncPassword(req: any, res: any, next: any) {
+async function checkSyncPassword(req: any, res: any, next: any): Promise<void> {
   try {
     const config = await prisma.configuracao.findUnique({ where: { chave: 'sync_password' } });
     if (config && config.valor && config.valor.trim() !== '') {
       const clientPassword = req.headers['x-sync-password'];
       if (clientPassword !== config.valor) {
-        return res.status(401).json({ error: 'Senha de sincronização inválida.' });
+        res.status(401).json({ error: 'Senha de sincronização inválida.' });
+        return;
       }
     }
     next();
   } catch (e) {
-    return res.status(500).json({ error: 'Erro ao validar segurança.' });
+    res.status(500).json({ error: 'Erro ao validar segurança.' });
+    return;
   }
 }
 
@@ -182,7 +185,7 @@ router.post('/push', checkSyncPassword, async (req, res) => {
     for (const acao of acoes || []) {
       try {
         if (acao.tipo === 'NOVO_USUARIO') {
-          const { id, nome, departamento, whatsapp: userWhatsapp, fotoPerfilUrl } = acao.dados || {};
+          const { id, nome, departamento, whatsapp: userWhatsapp, fotoPerfilUrl, role } = acao.dados || {};
           if (nome) {
             const cleanName = String(nome).trim();
             const existing = await prisma.usuario.findFirst({
@@ -195,7 +198,9 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             });
 
             if (!existing) {
-              const generatedEmail = `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.random().toString(36).substring(2, 6)}@estoque.local`;
+              const targetRole = role || 'SETOR';
+              const emailPrefix = targetRole === 'AVULSO' ? 'avulso_' : 'user_';
+              const generatedEmail = `${emailPrefix}${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.random().toString(36).substring(2, 6)}@estoque.local`;
               const dummyHash = await bcrypt.hash('123456', 10);
               let autoFoto = fotoPerfilUrl || null;
               
@@ -214,7 +219,7 @@ router.post('/push', checkSyncPassword, async (req, res) => {
                   whatsapp: userWhatsapp || null,
                   email: generatedEmail,
                   senhaHash: dummyHash,
-                  role: 'SETOR',
+                  role: targetRole,
                   fotoPerfilUrl: autoFoto
                 }
               });
@@ -242,21 +247,65 @@ router.post('/push', checkSyncPassword, async (req, res) => {
         }
 
         if (acao.tipo === 'NOVA_REQUISICAO_AVULSA') {
-          const { requisicaoId, solicitanteNome, departamento, whatsapp: reqWhatsapp, usuarioId } = acao.dados || {};
+          const { requisicaoId, solicitanteNome, departamento, whatsapp: reqWhatsapp, usuarioId, fotoPerfilUrl, horarioOrganizacao, dataInicioEvento, dataFimEvento } = acao.dados || {};
           if (requisicaoId) {
             const exists = await prisma.requisicao.findUnique({ where: { id: requisicaoId } });
             if (!exists) {
+              let finalUserId = usuarioId;
+              const cleanName = solicitanteNome ? String(solicitanteNome).trim() : 'Desconhecido';
+              
+              if (!finalUserId && cleanName !== 'Desconhecido') {
+                let avulsoUser = await prisma.usuario.findFirst({
+                  where: {
+                    nome: { equals: cleanName },
+                    role: 'AVULSO'
+                  }
+                });
+
+                if (!avulsoUser) {
+                  const generatedEmail = `avulso_${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.random().toString(36).substring(2, 6)}@estoque.local`;
+                  const dummyHash = await bcrypt.hash('avulso123', 10);
+                  
+                  let autoFoto = fotoPerfilUrl || null;
+                  if (reqWhatsapp && !autoFoto && (global as any).whatsappStatus === 'CONECTADO') {
+                    try {
+                      const fetchedFoto = await whatsapp.getProfilePictureUrl(reqWhatsapp);
+                      if (fetchedFoto) autoFoto = fetchedFoto;
+                    } catch (e) {}
+                  }
+
+                  avulsoUser = await prisma.usuario.create({
+                    data: {
+                      nome: cleanName,
+                      departamento: departamento || 'N/D',
+                      whatsapp: reqWhatsapp || null,
+                      email: generatedEmail,
+                      senhaHash: dummyHash,
+                      role: 'AVULSO',
+                      fotoPerfilUrl: autoFoto
+                    }
+                  });
+                  logs.push(`Usuário Avulso "${cleanName}" persistido.`);
+                }
+                finalUserId = avulsoUser.id;
+              }
+
+              const dataMontagem = horarioOrganizacao ? new Date(horarioOrganizacao) : null;
+              const dataInicio = dataInicioEvento ? new Date(dataInicioEvento) : new Date();
+              const dataFim = dataFimEvento ? new Date(dataFimEvento) : new Date(dataInicio.getTime() + 24 * 60 * 60 * 1000);
+
               await prisma.requisicao.create({
                 data: {
                   id: requisicaoId,
-                  solicitanteNome: solicitanteNome || 'Desconhecido',
+                  solicitanteNome: cleanName,
                   departamento: departamento || 'N/D',
                   solicitanteWhatsapp: reqWhatsapp || null,
-                  usuarioId: usuarioId || null,
+                  usuarioId: finalUserId || null,
                   status: 'AGUARDANDO_DEVOLUCAO',
-                  dataInicioEvento: new Date(),
-                  dataFimEvento: new Date(),
-                  dataRetiradaSugerida: new Date()
+                  dataInicioEvento: dataInicio,
+                  dataFimEvento: dataFim,
+                  horarioOrganizacao: dataMontagem,
+                  dataRetiradaSugerida: dataMontagem || dataInicio
                 }
               });
               logs.push(`Requisição Avulsa ${requisicaoId} criada.`);
@@ -587,8 +636,9 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             // 2. Cria a requisição caso não exista
             const reqExists = await prisma.requisicao.findUnique({ where: { id: reqId } });
             if (!reqExists) {
-              const dataInicio = dataCriacao ? new Date(dataCriacao) : new Date();
-              const dataFim = new Date(dataInicio.getTime() + 24 * 60 * 60 * 1000);
+              const dataMontagem = acao.dados?.horarioOrganizacao ? new Date(acao.dados.horarioOrganizacao) : null;
+              const dataInicio = acao.dados?.dataInicioEvento ? new Date(acao.dados.dataInicioEvento) : (dataCriacao ? new Date(dataCriacao) : new Date());
+              const dataFim = acao.dados?.dataFimEvento ? new Date(acao.dados.dataFimEvento) : new Date(dataInicio.getTime() + 24 * 60 * 60 * 1000);
 
               await prisma.requisicao.create({
                 data: {
@@ -597,10 +647,14 @@ router.post('/push', checkSyncPassword, async (req, res) => {
                   departamento: departamento || (usuario?.departamento) || 'Geral',
                   solicitanteWhatsapp: waNum || usuario?.whatsapp || null,
                   usuarioId: usuario?.id || null,
+                  localId: acao.dados?.localId || null,
                   status: 'EMPRESTADO',
                   dataInicioEvento: dataInicio,
                   dataFimEvento: dataFim,
-                  dataRetiradaSugerida: dataInicio
+                  horarioOrganizacao: dataMontagem,
+                  dataRetiradaSugerida: dataMontagem || dataInicio,
+                  dataEntrega: new Date(),
+                  operadorEntrega: 'App Coletor Mobile'
                 }
               });
             }
@@ -808,21 +862,13 @@ router.post('/push', checkSyncPassword, async (req, res) => {
     for (const reqId of Object.keys(reqsAtualizadas)) {
       const equipamentosEntregues = reqsAtualizadas[reqId];
       if (equipamentosEntregues.length > 0) {
-        const reqDb = await prisma.requisicao.findUnique({ where: { id: reqId } });
-        if (reqDb) {
-          await prisma.requisicao.update({
-            where: { id: reqId },
-            data: { status: 'AGUARDANDO_DEVOLUCAO' }
-          }).catch(e => console.warn('Erro ao atualizar status requisição:', e));
+        await prisma.requisicao.update({
+          where: { id: reqId },
+          data: { status: 'AGUARDANDO_DEVOLUCAO' }
+        }).catch(e => console.warn('Erro ao atualizar status requisição pós-sync:', e));
 
-          if (reqDb.solicitanteWhatsapp) {
-            let digits = reqDb.solicitanteWhatsapp.replace(/\D/g, '');
-            if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
-            const num = digits + '@s.whatsapp.net';
-            const msg = `🚨 *Sua requisição de equipamentos acaba de ser entregue!*\n\nOlá, ${reqDb.solicitanteNome}. Os seguintes itens foram separados/entregues para você:\n- ${equipamentosEntregues.join('\n- ')}\n\nPor favor, cuide bem dos aparelhos!`;
-            await whatsapp.sendMessage(num, msg).catch(e => console.error("Erro ao notificar entrega no WA:", e));
-          }
-        }
+        // Envia mensagem detalhada de entrega com lista de patrimônios e previsão de devolução
+        await notificarEntregaEquipamentos(reqId).catch(e => console.error("Erro ao notificar entrega no WA pós-sync:", e));
       }
     }
 
@@ -838,18 +884,10 @@ router.post('/push', checkSyncPassword, async (req, res) => {
             await prisma.requisicao.update({
               where: { id: reqId },
               data: { status: 'DEVOLVIDO' }
-            }).catch(e => console.warn('Erro ao finalizar requisição:', e));
+            }).catch(e => console.warn('Erro ao finalizar requisição pós-sync:', e));
 
-            const countAvarias = await prisma.historicoAvaria.count({ where: { requisicaoId: reqId } });
-            const observacaoAvaria = countAvarias > 0 ? " Observamos que houve relato de avaria, defeito ou pendência em algum(ns) dos itens devolvidos." : "";
-
-            if (reqDb.solicitanteWhatsapp) {
-              let digits = reqDb.solicitanteWhatsapp.replace(/\D/g, '');
-              if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
-              const num = digits + '@s.whatsapp.net';
-              const msg = `Olá, ${reqDb.solicitanteNome}! Recebemos os equipamentos de volta.${observacaoAvaria} Agradecemos pelo cuidado e até a próxima!`;
-              await whatsapp.sendMessage(num, msg).catch(e => console.error("Erro ao notificar devolução no WA:", e));
-            }
+            // Envia mensagem de devolução (com detalhamento de patrimônio e defeito se houver avaria)
+            await notificarDevolucaoEquipamentos(reqId).catch(e => console.error("Erro ao notificar devolução no WA pós-sync:", e));
           }
         }
       }

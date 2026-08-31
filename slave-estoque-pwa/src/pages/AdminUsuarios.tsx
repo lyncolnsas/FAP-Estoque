@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { toast } from 'sonner';
+import { formatPhoneMask } from '../lib/utils';
 
 interface CategoriaAdmin {
   id: string;
@@ -367,10 +368,10 @@ export default function AdminUsuarios() {
               <input 
                 type="text" 
                 value={whatsapp} 
-                onChange={e => setWhatsapp(e.target.value)} 
+                onChange={e => setWhatsapp(formatPhoneMask(e.target.value))} 
                 list="contatosNumberList" 
                 className="w-full rounded-xl border-slate-200 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-4 py-2" 
-                placeholder="Ex: 11999999999" 
+                placeholder="Ex: (99) 99156-1407" 
               />
               <datalist id="contatosNumberList">
                 {contatosWhatsapp.map((c, i) => (

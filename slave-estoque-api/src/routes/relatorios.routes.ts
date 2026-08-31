@@ -81,9 +81,103 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
       orderBy: { dataInicioEvento: 'asc' },
       include: {
         itens: { include: { equipamento: true } },
+        usuario: true,
+        local: true
+      }
+    });
+
+    // Histórico Detalhado de Empréstimos e Devoluções (Todas as requisições e reservas)
+    const todasRequisicoesCompletas = await prisma.requisicao.findMany({
+      orderBy: { criadoEm: 'desc' },
+      include: {
+        itens: { include: { equipamento: true } },
+        usuario: true,
+        local: true,
+        historicoAvarias: { include: { equipamento: true } }
+      }
+    });
+
+    const reservasLocaisDb = await prisma.reservaLocal.findMany({
+      orderBy: { dataInicio: 'desc' },
+      include: {
+        local: true,
         usuario: true
       }
     });
+
+    const historicoEmprestimosDetalhado: any[] = [];
+
+    todasRequisicoesCompletas.forEach(req => {
+      // Agrupar itens por nome do equipamento
+      const itensAgrupadosMap: Record<string, { nome: string, total: number, avariasCount: number, avarias: string[] }> = {};
+      
+      req.itens.forEach(it => {
+        const nomeEq = it.equipamento?.nome || 'Equipamento';
+        if (!itensAgrupadosMap[nomeEq]) {
+          itensAgrupadosMap[nomeEq] = { nome: nomeEq, total: 0, avariasCount: 0, avarias: [] };
+        }
+        itensAgrupadosMap[nomeEq].total += 1;
+        
+        // Verifica se houve avaria registrada para esse item nesta requisição
+        const avariasDesteItem = (req.historicoAvarias || []).filter(h => h.equipamentoId === it.equipamentoId);
+        if (avariasDesteItem.length > 0) {
+          itensAgrupadosMap[nomeEq].avariasCount += avariasDesteItem.length;
+          itensAgrupadosMap[nomeEq].avarias.push(...avariasDesteItem.map(a => a.descricao));
+        }
+      });
+
+      const itensAgrupados = Object.values(itensAgrupadosMap);
+      const totalAvarias = itensAgrupados.reduce((acc, i) => acc + i.avariasCount, 0);
+
+      historicoEmprestimosDetalhado.push({
+        id: req.id,
+        tipo: req.localId && req.itens.length > 0 ? 'COMPLETO' : (req.localId ? 'RESERVA_ESPACO' : 'MATERIAIS'),
+        solicitanteNome: req.solicitanteNome || req.usuario?.nome || 'Desconhecido',
+        departamento: req.departamento || req.usuario?.departamento || 'Geral',
+        solicitanteWhatsapp: req.solicitanteWhatsapp || req.usuario?.whatsapp || null,
+        localNome: req.local?.nome || null,
+        dataInicioEvento: req.dataInicioEvento,
+        dataFimEvento: req.dataFimEvento,
+        horarioOrganizacao: req.horarioOrganizacao,
+        dataSaida: req.dataEntrega || req.dataInicioEvento || req.criadoEm,
+        operadorSaida: req.operadorEntrega || 'Estoque',
+        dataRetorno: ['DEVOLVIDO', 'CANCELADO'].includes(req.status) ? (req.dataDevolucao || req.atualizadoEm) : null,
+        operadorRetorno: ['DEVOLVIDO', 'CANCELADO'].includes(req.status) ? (req.operadorDevolucao || 'Estoque') : null,
+        status: req.status,
+        totalItens: req.itens.length,
+        itensAgrupados,
+        totalAvarias,
+        criadoEm: req.criadoEm
+      });
+    });
+
+    reservasLocaisDb.forEach(res => {
+      // Se não for id de requisição já processada
+      if (!historicoEmprestimosDetalhado.some(h => h.id === res.id)) {
+        historicoEmprestimosDetalhado.push({
+          id: res.id,
+          tipo: 'RESERVA_ESPACO',
+          solicitanteNome: res.usuario?.nome || 'Desconhecido',
+          departamento: res.usuario?.departamento || 'Reserva de Espaço',
+          solicitanteWhatsapp: res.usuario?.whatsapp || null,
+          localNome: res.local?.nome || 'Espaço',
+          dataInicioEvento: res.dataInicio,
+          dataFimEvento: res.dataFim,
+          horarioOrganizacao: null,
+          dataSaida: res.dataInicio,
+          operadorSaida: 'Sistema / Reserva',
+          dataRetorno: ['CONFIRMADA', 'FINALIZADA', 'DEVOLVIDO'].includes(res.status) && new Date(res.dataFim) < new Date() ? res.dataFim : null,
+          operadorRetorno: ['CONFIRMADA', 'FINALIZADA', 'DEVOLVIDO'].includes(res.status) && new Date(res.dataFim) < new Date() ? 'Concluído' : null,
+          status: res.status,
+          totalItens: 0,
+          itensAgrupados: [],
+          totalAvarias: 0,
+          criadoEm: res.criadoEm
+        });
+      }
+    });
+
+    historicoEmprestimosDetalhado.sort((a, b) => new Date(b.dataSaida || b.criadoEm).getTime() - new Date(a.dataSaida || a.criadoEm).getTime());
 
     // Lista Completa de Solicitantes (Usuários e Avulsos) com métricas detalhadas
     const usuariosDb = await prisma.usuario.findMany({
@@ -130,7 +224,8 @@ router.get('/geral', authMiddleware, authRole(['ADMIN']), async (req, res) => {
       rankingUsuarios,
       solicitantes,
       historicoAvarias,
-      requisicoes
+      requisicoes,
+      historicoEmprestimosDetalhado
     });
   } catch (error) {
     console.error('Erro ao gerar relatório geral:', error);

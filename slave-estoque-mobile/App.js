@@ -54,12 +54,12 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator initialRouteName="Home">
-        <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'Painel Offline' }} />
+        <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'Painel FAP Estoque' }} />
         <Stack.Screen 
           name="QRScanner" 
           component={QRScannerScreen} 
           options={{ 
-            title: 'Ler QR do Servidor',
+            title: 'Conectar ao Servidor (QR)',
             contentStyle: { backgroundColor: 'transparent' }
           }} 
         />
@@ -67,16 +67,16 @@ export default function App() {
           name="BarcodeScanner" 
           component={BarcodeScannerScreen} 
           options={{ 
-            title: 'Escanear Equipamento',
+            title: 'Leitor de Patrimônio',
             contentStyle: { backgroundColor: 'transparent' }
           }} 
         />
         <Stack.Screen name="CadastrarEquipamento" component={CadastrarEquipamentoScreen} options={{ title: 'Novo Material / Equipamento' }} />
-        <Stack.Screen name="Emprestimo" component={EmprestimoScreen} options={{ title: 'Novo Empréstimo', headerStyle: { backgroundColor: '#4f46e5' }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' } }} />
-        <Stack.Screen name="CadastrarCategoria" component={CadastrarCategoriaScreen} options={{ title: 'Categorias & Subtipos' }} />
+        <Stack.Screen name="Emprestimo" component={EmprestimoScreen} options={{ title: 'Novo Empréstimo', headerStyle: { backgroundColor: '#2563eb' }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' } }} />
+        <Stack.Screen name="CadastrarCategoria" component={CadastrarCategoriaScreen} options={{ title: 'Categorias & Classificações' }} />
         <Stack.Screen name="CadastrarLocal" component={CadastrarLocalScreen} options={{ title: 'Locais & Espaços' }} />
         <Stack.Screen name="ReservarLocal" component={ReservarLocalScreen} options={{ title: 'Reserva de Espaço' }} />
-        <Stack.Screen name="CadastrarAvaria" component={CadastrarAvariaScreen} options={{ title: 'Avarias & Manutenções' }} />
+        <Stack.Screen name="CadastrarAvaria" component={CadastrarAvariaScreen} options={{ title: 'Defeitos & Manutenções' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

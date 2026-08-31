@@ -34,7 +34,12 @@ export const initDB = () => {
       id TEXT PRIMARY KEY,
       solicitanteNome TEXT,
       departamento TEXT,
-      status TEXT
+      status TEXT,
+      dataInicioEvento TEXT,
+      dataFimEvento TEXT,
+      horarioOrganizacao TEXT,
+      localId TEXT,
+      solicitanteWhatsapp TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ItemRequisicao (
@@ -92,6 +97,10 @@ export const initDB = () => {
       solicitanteNome TEXT,
       departamento TEXT,
       dataCriacao TEXT,
+      horarioOrganizacao TEXT,
+      dataInicioEvento TEXT,
+      dataFimEvento TEXT,
+      localId TEXT,
       synced INTEGER DEFAULT 0
     );
 
@@ -116,26 +125,76 @@ export const initDB = () => {
     );
   `);
 
-  // Migrações seguras de colunas existentes (executadas para compatibilidade retroativa)
+  // Migrações seguras de colunas existentes (executadas para compatibilidade retroativa total)
   const safeAlter = (sql) => {
     try { db.execSync(sql); } catch (e) {}
   };
 
+  // Equipamento
   safeAlter(`ALTER TABLE Equipamento ADD COLUMN permitirEmprestimo INTEGER DEFAULT 1;`);
   safeAlter(`ALTER TABLE Equipamento ADD COLUMN recebeuComDefeito INTEGER DEFAULT 0;`);
   safeAlter(`ALTER TABLE Equipamento ADD COLUMN fotoUrl TEXT;`);
   safeAlter(`ALTER TABLE Equipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
+
+  // Local
   safeAlter(`ALTER TABLE Local ADD COLUMN synced INTEGER DEFAULT 1;`);
   safeAlter(`ALTER TABLE Local ADD COLUMN capacidade INTEGER DEFAULT 0;`);
   safeAlter(`ALTER TABLE Local ADD COLUMN fotoUrl TEXT;`);
-  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN synced INTEGER DEFAULT 1;`);
-  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN synced INTEGER DEFAULT 1;`);
-  safeAlter(`ALTER TABLE HistoricoAvaria ADD COLUMN synced INTEGER DEFAULT 1;`);
-  safeAlter(`ALTER TABLE Categoria ADD COLUMN synced INTEGER DEFAULT 1;`);
-  safeAlter(`ALTER TABLE TipoEquipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
+
+  // Usuario
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN nome TEXT;`);
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN departamento TEXT;`);
+  safeAlter(`ALTER TABLE Usuario ADD COLUMN whatsapp TEXT;`);
   safeAlter(`ALTER TABLE Usuario ADD COLUMN fotoUrl TEXT;`);
   safeAlter(`ALTER TABLE Usuario ADD COLUMN corPersonalizada TEXT;`);
   safeAlter(`ALTER TABLE Usuario ADD COLUMN role TEXT DEFAULT 'SETOR';`);
+
+  // Requisicao
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN solicitanteNome TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN departamento TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN status TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN dataInicioEvento TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN dataFimEvento TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN horarioOrganizacao TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN localId TEXT;`);
+  safeAlter(`ALTER TABLE Requisicao ADD COLUMN solicitanteWhatsapp TEXT;`);
+
+  // EmprestimoOffline
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN equipamentoId TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN equipamentoNome TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN patrimonio TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN solicitanteNome TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN departamento TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN dataCriacao TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN horarioOrganizacao TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN dataInicioEvento TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN dataFimEvento TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN localId TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN solicitanteWhatsapp TEXT;`);
+  safeAlter(`ALTER TABLE EmprestimoOffline ADD COLUMN synced INTEGER DEFAULT 0;`);
+
+  // ItemRequisicao
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN requisicaoId TEXT;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN equipamentoId TEXT;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN statusSeparacao INTEGER DEFAULT 0;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN statusDevolucao INTEGER DEFAULT 0;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN offlineAcao TEXT;`);
+  safeAlter(`ALTER TABLE ItemRequisicao ADD COLUMN synced INTEGER DEFAULT 1;`);
+
+  // ReservaLocal
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN localId TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN usuarioId TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN solicitanteNome TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN departamento TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN dataInicio TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN dataFim TEXT;`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN status TEXT DEFAULT 'CONFIRMADA';`);
+  safeAlter(`ALTER TABLE ReservaLocal ADD COLUMN synced INTEGER DEFAULT 1;`);
+
+  // Avarias, Categorias e Tipos
+  safeAlter(`ALTER TABLE HistoricoAvaria ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE Categoria ADD COLUMN synced INTEGER DEFAULT 1;`);
+  safeAlter(`ALTER TABLE TipoEquipamento ADD COLUMN synced INTEGER DEFAULT 1;`);
 
   // Sanitização para garantir que nenhum registro pré-existente fique com synced = NULL
   safeAlter(`UPDATE HistoricoAvaria SET synced = 1 WHERE synced IS NULL;`);

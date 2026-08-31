@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   FileText, Download, TrendingUp, AlertTriangle, Package, CheckCircle, Clock, Users, Wrench, Activity,
-  Phone, UserCheck, Search
+  Phone, UserCheck, Search, ChevronDown, ChevronRight
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -23,6 +23,34 @@ interface SolicitanteRelatorio {
   itensAtivos: number;
 }
 
+interface ItemAgrupadoRelatorio {
+  nome: string;
+  total: number;
+  avariasCount: number;
+  avarias: string[];
+}
+
+interface HistoricoEmprestimoDetalhado {
+  id: string;
+  tipo: 'COMPLETO' | 'RESERVA_ESPACO' | 'MATERIAIS';
+  solicitanteNome: string;
+  departamento: string;
+  solicitanteWhatsapp?: string;
+  localNome?: string;
+  dataInicioEvento: string;
+  dataFimEvento: string;
+  horarioOrganizacao?: string;
+  dataSaida: string;
+  operadorSaida: string;
+  dataRetorno?: string;
+  operadorRetorno?: string;
+  status: string;
+  totalItens: number;
+  itensAgrupados: ItemAgrupadoRelatorio[];
+  totalAvarias: number;
+  criadoEm: string;
+}
+
 interface RelatorioGeral {
   resumo: {
     totalEquipamentos: number;
@@ -36,14 +64,19 @@ interface RelatorioGeral {
   equipamentos: any[];
   historicoAvarias: any[];
   requisicoes: any[];
+  historicoEmprestimosDetalhado?: HistoricoEmprestimoDetalhado[];
 }
 
 export default function AdminRelatorios() {
   const [data, setData] = useState<RelatorioGeral | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('visao-geral');
+  const [activeTab, setActiveTab] = useState('historico-detalhado');
   const [filtroSolicitantes, setFiltroSolicitantes] = useState<'TODOS' | 'AVULSOS' | 'SISTEMA'>('TODOS');
   const [buscaSolicitante, setBuscaSolicitante] = useState('');
+  const [buscaHistorico, setBuscaHistorico] = useState('');
+  const [filtroStatusHistorico, setFiltroStatusHistorico] = useState<'TODOS' | 'EMPRESTADOS' | 'DEVOLVIDOS' | 'ESPACO'>('TODOS');
+  const [modoVisualizacaoHistorico, setModoVisualizacaoHistorico] = useState<'SOLICITANTES' | 'CRONOLOGICO'>('SOLICITANTES');
+  const [expandedSolicitantes, setExpandedSolicitantes] = useState<Set<string>>(new Set());
   
   const { token } = useAuth();
 
@@ -86,7 +119,7 @@ export default function AdminRelatorios() {
     doc.setTextColor(100);
     doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, pageWidth / 2, 55, { align: 'center' });
 
-    // Resumo
+    // 1. Resumo
     doc.setFontSize(14);
     doc.setTextColor(0);
     doc.text('1. Resumo do Acervo', 40, 90);
@@ -107,10 +140,54 @@ export default function AdminRelatorios() {
       headStyles: { fillColor: [41, 128, 185] }
     });
 
-    // Avarias Recentes
+    // 2. Histórico por Solicitante de Empréstimos & Devoluções
     const finalYResumo = (doc as any).lastAutoTable.finalY || 150;
     doc.setFontSize(14);
-    doc.text('2. Últimas Avarias Registradas', 40, finalYResumo + 30);
+    doc.text('2. Histórico de Empréstimos & Entradas (Agrupado por Solicitante)', 40, finalYResumo + 30);
+
+    const mapSolPdf = new Map<string, HistoricoEmprestimoDetalhado[]>();
+    (data.historicoEmprestimosDetalhado || []).forEach(h => {
+      const key = `${h.solicitanteNome} (${h.departamento})`;
+      if (!mapSolPdf.has(key)) mapSolPdf.set(key, []);
+      mapSolPdf.get(key)!.push(h);
+    });
+
+    const historicoBody: any[] = [];
+    mapSolPdf.forEach((regs, solKey) => {
+      regs.forEach((h, idx) => {
+        const materiaisFormatados = h.itensAgrupados && h.itensAgrupados.length > 0
+          ? h.itensAgrupados.map(i => `${i.nome} (x${i.total})${i.avariasCount > 0 ? ` [${i.avariasCount} avaria]` : ''}`).join(', ')
+          : (h.localNome ? `Reserva de ${h.localNome}` : 'Sem materiais');
+
+        const saidaFormatada = `${new Date(h.dataSaida).toLocaleDateString('pt-BR')} ${new Date(h.dataSaida).toLocaleTimeString('pt-BR').slice(0, 5)}\nPor: ${h.operadorSaida}`;
+        const retornoFormatada = h.dataRetorno 
+          ? `${new Date(h.dataRetorno).toLocaleDateString('pt-BR')} ${new Date(h.dataRetorno).toLocaleTimeString('pt-BR').slice(0, 5)}\nPor: ${h.operadorRetorno || 'Recebido'}`
+          : 'Em aberto';
+
+        historicoBody.push([
+          idx === 0 ? `${solKey}` : '',
+          h.localNome || '-',
+          saidaFormatada,
+          retornoFormatada,
+          materiaisFormatados,
+          h.status
+        ]);
+      });
+    });
+
+    autoTable(doc, {
+      startY: finalYResumo + 40,
+      head: [['Solicitante / Setor', 'Espaço', 'Saída (Data & Operador)', 'Entrada (Data & Operador)', 'Materiais Solicitados', 'Status']],
+      body: historicoBody,
+      theme: 'striped',
+      headStyles: { fillColor: [39, 174, 96] },
+      styles: { fontSize: 8, cellPadding: 3 }
+    });
+
+    // 3. Avarias Recentes
+    doc.addPage();
+    doc.setFontSize(14);
+    doc.text('3. Últimas Avarias Registradas', 40, 40);
 
     const avariasBody = data.historicoAvarias.map(avaria => [
       new Date(avaria.dataRegistro).toLocaleDateString('pt-BR'),
@@ -120,42 +197,17 @@ export default function AdminRelatorios() {
     ]);
 
     autoTable(doc, {
-      startY: finalYResumo + 40,
+      startY: 50,
       head: [['Data', 'Equipamento', 'Patrimônio', 'Descrição']],
       body: avariasBody,
       theme: 'striped',
       headStyles: { fillColor: [192, 57, 43] }
     });
 
-    // Emprestados Atualmente
+    // 4. Solicitantes & Avulsos
     const finalYAvarias = (doc as any).lastAutoTable.finalY || 300;
     doc.setFontSize(14);
-    doc.text('3. Equipamentos Emprestados no Momento', 40, finalYAvarias + 30);
-
-    const emprestados = data.equipamentos.filter(e => e.statusCondicao === 'EMPRESTADO');
-    const emprestadosBody = emprestados.map(eq => {
-      const activeReq = eq.itensRequisicao?.[0]?.requisicao;
-      return [
-        eq.nome,
-        eq.codigoPatrimonio,
-        activeReq ? activeReq.solicitanteNome : 'N/A',
-        activeReq ? new Date(activeReq.dataInicioEvento).toLocaleDateString('pt-BR') : 'N/A',
-        (eq.quantidadeUso || 0).toString()
-      ];
-    });
-
-    autoTable(doc, {
-      startY: finalYAvarias + 40,
-      head: [['Equipamento', 'Patrimônio', 'Responsável Atual', 'Data Empréstimo', 'Vezes Usado']],
-      body: emprestadosBody,
-      theme: 'striped',
-      headStyles: { fillColor: [243, 156, 18] }
-    });
-
-    // Solicitantes & Avulsos
-    doc.addPage();
-    doc.setFontSize(14);
-    doc.text('4. Solicitantes & Histórico de Retiradas', 40, 40);
+    doc.text('4. Solicitantes & Histórico de Retiradas', 40, finalYAvarias + 30);
 
     const solicitantesBody = (data.solicitantes || []).map(s => [
       s.nome,
@@ -168,11 +220,11 @@ export default function AdminRelatorios() {
     ]);
 
     autoTable(doc, {
-      startY: 50,
+      startY: finalYAvarias + 40,
       head: [['Solicitante', 'Departamento', 'WhatsApp', 'Tipo', 'Requisições', 'Total Itens', 'Itens Ativos']],
       body: solicitantesBody,
       theme: 'striped',
-      headStyles: { fillColor: [39, 174, 96] }
+      headStyles: { fillColor: [41, 128, 185] }
     });
 
     // Salvando
@@ -199,6 +251,24 @@ export default function AdminRelatorios() {
     return true;
   });
 
+  const historicoFiltrado = (data.historicoEmprestimosDetalhado || []).filter(h => {
+    if (filtroStatusHistorico === 'EMPRESTADOS' && !['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO', 'EM_SEPARACAO'].includes(h.status)) return false;
+    if (filtroStatusHistorico === 'DEVOLVIDOS' && !['DEVOLVIDO', 'FINALIZADA'].includes(h.status)) return false;
+    if (filtroStatusHistorico === 'ESPACO' && !h.localNome) return false;
+
+    if (buscaHistorico.trim()) {
+      const q = buscaHistorico.toLowerCase();
+      const matchSol = h.solicitanteNome.toLowerCase().includes(q);
+      const matchDep = h.departamento.toLowerCase().includes(q);
+      const matchLoc = h.localNome && h.localNome.toLowerCase().includes(q);
+      const matchOpSaida = h.operadorSaida && h.operadorSaida.toLowerCase().includes(q);
+      const matchOpRet = h.operadorRetorno && h.operadorRetorno.toLowerCase().includes(q);
+      const matchItem = h.itensAgrupados && h.itensAgrupados.some(i => i.nome.toLowerCase().includes(q));
+      return matchSol || matchDep || matchLoc || matchOpSaida || matchOpRet || matchItem;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -206,7 +276,7 @@ export default function AdminRelatorios() {
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             <FileText className="text-blue-500" /> Relatórios
           </h2>
-          <p className="text-slate-500">Visão consolidada, métricas de solicitantes e exportação em PDF.</p>
+          <p className="text-slate-500">Histórico de saídas/entradas com operadores, métricas de solicitantes e exportação em PDF.</p>
         </div>
         <button 
           onClick={exportPDF}
@@ -219,6 +289,14 @@ export default function AdminRelatorios() {
 
       {/* Navegação por Abas */}
       <div className="flex overflow-x-auto border-b border-slate-200 gap-8 hide-scrollbar">
+        <button 
+          onClick={() => setActiveTab('historico-detalhado')}
+          className={`pb-4 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap border-b-2 ${
+            activeTab === 'historico-detalhado' ? 'border-teal-600 text-teal-700 font-bold' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+          }`}
+        >
+          <FileText size={18} /> Histórico de Empréstimos & Entradas
+        </button>
         <button 
           onClick={() => setActiveTab('visao-geral')}
           className={`pb-4 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap border-b-2 ${
@@ -260,6 +338,362 @@ export default function AdminRelatorios() {
           <Users size={18} /> Ranking de Usuários
         </button>
       </div>
+
+      {/* ABA: HISTÓRICO DETALHADO DE EMPRÉSTIMOS E DEVOLUÇÕES */}
+      {activeTab === 'historico-detalhado' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+
+          {/* Barra de Filtros e Modo de Visualização */}
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase mr-1">Status:</span>
+              <button
+                onClick={() => setFiltroStatusHistorico('TODOS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroStatusHistorico === 'TODOS' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Todos
+              </button>
+              <button
+                onClick={() => setFiltroStatusHistorico('EMPRESTADOS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroStatusHistorico === 'EMPRESTADOS' ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Em Aberto / Em Uso
+              </button>
+              <button
+                onClick={() => setFiltroStatusHistorico('DEVOLVIDOS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroStatusHistorico === 'DEVOLVIDOS' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Devolvidos / Concluídos
+              </button>
+              <button
+                onClick={() => setFiltroStatusHistorico('ESPACO')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroStatusHistorico === 'ESPACO' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Com Reserva de Espaço
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-bold shrink-0">
+                <button 
+                  onClick={() => setModoVisualizacaoHistorico('SOLICITANTES')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${modoVisualizacaoHistorico === 'SOLICITANTES' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Por Solicitante
+                </button>
+                <button 
+                  onClick={() => setModoVisualizacaoHistorico('CRONOLOGICO')}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${modoVisualizacaoHistorico === 'CRONOLOGICO' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Lista Completa
+                </button>
+              </div>
+
+              <div className="relative flex-1 max-w-xs">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar..."
+                  value={buscaHistorico}
+                  onChange={e => setBuscaHistorico(e.target.value)}
+                  className="w-full pl-9 pr-4 py-1.5 rounded-lg border border-slate-200 text-sm focus:border-teal-500 focus:ring-teal-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* VISUALIZAÇÃO AGRUPADA POR SOLICITANTE */}
+          {modoVisualizacaoHistorico === 'SOLICITANTES' ? (() => {
+            const gruposMap = new Map<string, {
+              nome: string;
+              departamento: string;
+              whatsapp?: string;
+              totalItens: number;
+              totalAvarias: number;
+              registros: HistoricoEmprestimoDetalhado[];
+            }>();
+
+            historicoFiltrado.forEach(h => {
+              const key = h.solicitanteNome.toLowerCase().trim();
+              if (!gruposMap.has(key)) {
+                gruposMap.set(key, {
+                  nome: h.solicitanteNome,
+                  departamento: h.departamento,
+                  whatsapp: h.solicitanteWhatsapp,
+                  totalItens: 0,
+                  totalAvarias: 0,
+                  registros: []
+                });
+              }
+              const g = gruposMap.get(key)!;
+              g.registros.push(h);
+              g.totalItens += h.totalItens;
+              g.totalAvarias += h.totalAvarias;
+              if (!g.whatsapp && h.solicitanteWhatsapp) g.whatsapp = h.solicitanteWhatsapp;
+            });
+
+            const solicitantesLista = Array.from(gruposMap.values());
+
+            if (solicitantesLista.length === 0) {
+              return (
+                <div className="bg-white rounded-2xl p-12 text-center text-slate-500 border border-slate-100 shadow-sm">
+                  Nenhum registro de empréstimo ou reserva encontrado.
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-4">
+                {solicitantesLista.map(g => {
+                  const isExpanded = expandedSolicitantes.has(g.nome);
+                  const toggleExpand = () => {
+                    const next = new Set(expandedSolicitantes);
+                    if (next.has(g.nome)) next.delete(g.nome);
+                    else next.add(g.nome);
+                    setExpandedSolicitantes(next);
+                  };
+
+                  return (
+                    <div key={g.nome} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden transition-all">
+                      {/* CABEÇALHO DO SOLICITANTE */}
+                      <div 
+                        onClick={toggleExpand}
+                        className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/80 transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-11 h-11 rounded-2xl bg-teal-50 border border-teal-200 text-teal-700 font-bold flex items-center justify-center text-sm shadow-sm">
+                            {g.nome.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-800 text-base">{g.nome}</h3>
+                            <p className="text-xs text-slate-500 font-medium">{g.departamento} {g.whatsapp ? `• ${g.whatsapp}` : ''}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 self-end sm:self-auto">
+                          <span className="bg-slate-100 text-slate-700 text-xs font-bold px-3 py-1 rounded-full border border-slate-200">
+                            {g.registros.length} {g.registros.length === 1 ? 'Empréstimo' : 'Empréstimos'}
+                          </span>
+                          <span className="bg-emerald-50 text-emerald-700 text-xs font-bold px-3 py-1 rounded-full border border-emerald-200">
+                            {g.totalItens} {g.totalItens === 1 ? 'Material' : 'Materiais'}
+                          </span>
+                          {g.totalAvarias > 0 && (
+                            <span className="bg-red-50 text-red-600 text-xs font-bold px-2.5 py-1 rounded-full border border-red-200">
+                              ⚠️ {g.totalAvarias} avaria(s)
+                            </span>
+                          )}
+                          <div className="p-1.5 rounded-lg bg-slate-100 text-slate-600">
+                            {isExpanded ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* DETALHES EXPANDIDOS COM TABELA DE SAÍDAS E ENTRADAS */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-100 bg-slate-50/50 p-4">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse bg-white rounded-xl overflow-hidden border border-slate-200/80 shadow-sm">
+                              <thead>
+                                <tr className="bg-slate-100/80 text-slate-600 text-xs uppercase border-b border-slate-200">
+                                  <th className="p-3 font-semibold">Espaço / Evento</th>
+                                  <th className="p-3 font-semibold">Saída (Entrega)</th>
+                                  <th className="p-3 font-semibold">Entrada (Devolução)</th>
+                                  <th className="p-3 font-semibold">Materiais Solicitados</th>
+                                  <th className="p-3 font-semibold text-center">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 text-xs">
+                                {g.registros.map(h => (
+                                  <tr key={h.id} className="hover:bg-slate-50 transition-colors">
+                                    <td className="p-3">
+                                      {h.localNome ? (
+                                        <div>
+                                          <span className="inline-flex items-center gap-1 font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                                            🏢 {h.localNome}
+                                          </span>
+                                          {h.horarioOrganizacao && (
+                                            <div className="text-[10px] text-amber-700 font-medium mt-0.5">
+                                              Montagem: {new Date(h.horarioOrganizacao).toLocaleDateString('pt-BR')} {new Date(h.horarioOrganizacao).toLocaleTimeString('pt-BR').slice(0, 5)}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-400">Sem espaço</span>
+                                      )}
+                                    </td>
+                                    <td className="p-3">
+                                      <div className="font-semibold text-slate-800">
+                                        {new Date(h.dataSaida).toLocaleDateString('pt-BR')} {new Date(h.dataSaida).toLocaleTimeString('pt-BR').slice(0, 5)}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500">Por: {h.operadorSaida}</div>
+                                    </td>
+                                    <td className="p-3">
+                                      {h.dataRetorno ? (
+                                        <div>
+                                          <div className="font-semibold text-emerald-700">
+                                            {new Date(h.dataRetorno).toLocaleDateString('pt-BR')} {new Date(h.dataRetorno).toLocaleTimeString('pt-BR').slice(0, 5)}
+                                          </div>
+                                          <div className="text-[10px] text-slate-500">Por: {h.operadorRetorno || 'Estoque'}</div>
+                                        </div>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                                          <Clock size={10}/> Em Aberto
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="p-3">
+                                      {h.itensAgrupados && h.itensAgrupados.length > 0 ? (
+                                        <div className="flex flex-wrap gap-1">
+                                          {h.itensAgrupados.map(item => (
+                                            <span key={item.nome} className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md text-[11px] text-slate-800 font-medium">
+                                              {item.nome} <strong>×{item.total}</strong>
+                                              {item.avariasCount > 0 && <span className="text-red-600 font-bold ml-1">({item.avariasCount} avaria)</span>}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-400">Apenas espaço</span>
+                                      )}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <span className={`px-2.5 py-0.5 rounded-full font-bold ${
+                                        ['DEVOLVIDO', 'FINALIZADA'].includes(h.status) ? 'bg-slate-100 text-slate-700' :
+                                        ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO'].includes(h.status) ? 'bg-green-100 text-green-800' :
+                                        ['EM_SEPARACAO', 'CONFIRMADA'].includes(h.status) ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
+                                      }`}>
+                                        {h.status}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })() : (
+            /* VISUALIZAÇÃO CRONOLÓGICA COMPLETA EM TABELA */
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-600 text-xs uppercase border-b border-slate-200">
+                      <th className="p-4 font-semibold">Solicitante & Depto</th>
+                      <th className="p-4 font-semibold">Espaço / Evento</th>
+                      <th className="p-4 font-semibold">Saída (Entrega)</th>
+                      <th className="p-4 font-semibold">Entrada (Devolução)</th>
+                      <th className="p-4 font-semibold">Materiais Agrupados</th>
+                      <th className="p-4 font-semibold text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {historicoFiltrado.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="p-8 text-center text-slate-500">
+                          Nenhum registro de empréstimo ou reserva encontrado com os filtros atuais.
+                        </td>
+                      </tr>
+                    ) : (
+                      historicoFiltrado.map((h) => (
+                        <tr key={h.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="p-4">
+                            <div className="font-bold text-slate-800">{h.solicitanteNome}</div>
+                            <div className="text-xs text-slate-500">{h.departamento}</div>
+                            {h.solicitanteWhatsapp && (
+                              <div className="text-[11px] text-emerald-600 flex items-center gap-1 mt-0.5 font-medium">
+                                <Phone size={10} /> {h.solicitanteWhatsapp}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {h.localNome ? (
+                              <div>
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                                  🏢 {h.localNome}
+                                </span>
+                                {h.horarioOrganizacao && (
+                                  <div className="text-[11px] text-amber-700 font-medium mt-1">
+                                    Montagem: {new Date(h.horarioOrganizacao).toLocaleDateString('pt-BR')} às {new Date(h.horarioOrganizacao).toLocaleTimeString('pt-BR').slice(0, 5)}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">Sem reserva de espaço</span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            <div className="font-semibold text-slate-800 text-xs">
+                              {new Date(h.dataSaida).toLocaleDateString('pt-BR')} às {new Date(h.dataSaida).toLocaleTimeString('pt-BR').slice(0, 5)}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Liberado por: <strong className="text-slate-700">{h.operadorSaida || 'Estoque'}</strong>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            {h.dataRetorno ? (
+                              <div>
+                                <div className="font-semibold text-emerald-700 text-xs">
+                                  {new Date(h.dataRetorno).toLocaleDateString('pt-BR')} às {new Date(h.dataRetorno).toLocaleTimeString('pt-BR').slice(0, 5)}
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  Recebido por: <strong className="text-slate-700">{h.operadorRetorno || 'Estoque'}</strong>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                                <Clock size={11}/> Em Posse / Em Uso
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {h.itensAgrupados && h.itensAgrupados.length > 0 ? (
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {h.itensAgrupados.map(item => (
+                                    <span key={item.nome} className="bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded-md text-xs text-slate-800 font-medium">
+                                      {item.nome} <strong className="text-slate-950">×{item.total}</strong>
+                                      {item.avariasCount > 0 && (
+                                        <span className="text-red-600 font-bold ml-1">
+                                          ({item.avariasCount} avaria)
+                                        </span>
+                                      )}
+                                    </span>
+                                  ))}
+                                </div>
+                                {h.totalAvarias > 0 && (
+                                  <div className="text-[11px] text-red-600 font-bold flex items-center gap-1 mt-0.5">
+                                    ⚠️ Total de {h.totalAvarias} item(ns) com avaria registrada
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">Apenas reserva do local</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-center">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                              ['DEVOLVIDO', 'FINALIZADA'].includes(h.status) ? 'bg-slate-100 text-slate-700' :
+                              ['EMPRESTADO', 'AGUARDANDO_DEVOLUCAO'].includes(h.status) ? 'bg-green-100 text-green-800' :
+                              ['EM_SEPARACAO', 'CONFIRMADA'].includes(h.status) ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {h.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ABA: VISÃO GERAL */}
       {activeTab === 'visao-geral' && (

@@ -5,16 +5,17 @@ import {
   ActivityIndicator, SafeAreaView, Platform, StatusBar
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { db } from "../db/database";
 import { imprimirEtiqueta } from "../services/printer";
 import { useKeyboardHeight } from "../hooks/useKeyboardHeight";
-import ImageCropModal from "../components/ImageCropModal";
 import { API_URL } from "../services/api";
 import {
   Camera, Image as ImageIcon, Plus, CheckSquare,
   Square, ChevronDown, Barcode, Trash2, X, RefreshCw,
-  Crop, Sliders, Check, QrCode, Save, Wrench, AlertTriangle, CheckCircle2
+  Crop, Sliders, Check, QrCode, Save, Wrench, AlertTriangle, CheckCircle2,
+  RotateCw, FlipHorizontal
 } from "lucide-react-native";
 
 export default function CadastrarEquipamentoScreen({ navigation, route }) {
@@ -138,55 +139,113 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
   };
 
   const tirarFoto = async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      return Alert.alert("Permissão", "É necessária permissão para usar a câmera.");
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCropImageRaw(result.assets[0].uri);
-      setShowCropModal(true);
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        return Alert.alert("Permissão", "É necessária permissão para usar a câmera.");
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setFotoUri(result.assets[0].uri);
+      }
+    } catch (e) {
+      console.error("Erro ao tirar foto:", e);
+      Alert.alert("Erro", "Falha ao abrir a câmera.");
     }
   };
 
   const escolherGaleria = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      return Alert.alert("Permissão", "É necessária permissão para acessar a galeria.");
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        return Alert.alert("Permissão", "É necessária permissão para acessar a galeria.");
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setFotoUri(result.assets[0].uri);
+      }
+    } catch (e) {
+      console.error("Erro ao selecionar imagem:", e);
+      Alert.alert("Erro", "Falha ao acessar a galeria.");
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCropImageRaw(result.assets[0].uri);
-      setShowCropModal(true);
+  };
+
+  const handleGirar90 = async () => {
+    if (!fotoUri) return;
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        fotoUri,
+        [{ rotate: 90 }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setFotoUri(manipResult.uri);
+    } catch (e) {
+      console.error("Erro ao girar imagem:", e);
+    }
+  };
+
+  const handleEspelhar = async () => {
+    if (!fotoUri) return;
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        fotoUri,
+        [{ flip: ImageManipulator.FlipType.Horizontal }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setFotoUri(manipResult.uri);
+    } catch (e) {
+      console.error("Erro ao espelhar imagem:", e);
     }
   };
 
   const gerarCodigoBase = () => {
-    if (!nome.trim()) return "EQ";
-    return nome
-      .replace(/[^a-zA-Z0-9 ]/g, "")
-      .split(" ")
-      .filter(n => n.length > 0)
-      .map(n => n.substring(0, 3).toUpperCase())
-      .slice(0, 2)
-      .join("-");
+    const cat = categorias.find(c => c.id === categoriaId);
+    const tipo = tipos.find(t => t.id === tipoId);
+
+    let prefixoCat = "EQP";
+    if (cat?.nome) {
+      prefixoCat = cat.nome.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(3, "X");
+    } else if (nome.trim()) {
+      prefixoCat = nome.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(3, "X");
+    }
+
+    let prefixoTipo = "GER";
+    if (tipo?.nome) {
+      prefixoTipo = tipo.nome.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(3, "X");
+    } else if (nome.trim()) {
+      const words = nome.trim().split(" ");
+      if (words.length > 1) {
+        prefixoTipo = words[1].substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(3, "X");
+      }
+    }
+
+    return `${prefixoCat}-${prefixoTipo}`;
   };
 
   const gerarPatrimonioUnico = () => {
-    if (!nome.trim()) {
-      return Alert.alert("Atenção", "Digite o nome do equipamento primeiro.");
+    if (!nome.trim() && !categoriaId) {
+      return Alert.alert("Atenção", "Selecione a categoria ou digite o nome primeiro.");
     }
     const prefix = gerarCodigoBase();
-    const randomCode = `${prefix}-${Math.floor(Math.random() * 90000 + 10000)}`;
-    setCodigoPatrimonio(randomCode);
+    let codigoGerado = "";
+    let existe = true;
+    while (existe) {
+      const num = Math.floor(1000 + Math.random() * 90000);
+      codigoGerado = `${prefix}-${num}`;
+      const check = db.getAllSync("SELECT id FROM Equipamento WHERE codigoPatrimonio = ?", [codigoGerado]);
+      if (check.length === 0) existe = false;
+    }
+    setCodigoPatrimonio(codigoGerado);
   };
 
   const handleCriarCategoriaRapida = () => {
@@ -238,7 +297,8 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
     if (!nome.trim()) {
       return Alert.alert("Atenção", "Preencha o nome do equipamento.");
     }
-    if (!codigoPatrimonio.trim()) {
+    const qty = parseInt(quantidade, 10) || 1;
+    if (qty === 1 && !codigoPatrimonio.trim()) {
       return Alert.alert("Atenção", "Informe ou gere o código de patrimônio.");
     }
 
@@ -325,9 +385,11 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
       // ----------------------------------------------------
       // FLUXO DE NOVO CADASTRO
       // ----------------------------------------------------
-      const qty = parseInt(quantidade, 10) || 1;
       if (qty < 1) {
         return Alert.alert("Atenção", "A quantidade deve ser pelo menos 1.");
+      }
+      if (recebeuComDefeito && qty > 1) {
+        return Alert.alert("Atenção", "Não é possível cadastrar itens em lote com defeito inicial. Cadastre individualmente se houver avaria.");
       }
       if (recebeuComDefeito && !avariaId) {
         return Alert.alert("Atenção", "Selecione o tipo de avaria inicial.");
@@ -335,12 +397,25 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
 
       const prefix = gerarCodigoBase();
       const statusCondicaoFinal = recebeuComDefeito ? "COM_DEFEITO" : "DISPONIVEL";
-      const baseNum = Math.floor(Math.random() * 80000 + 10000);
       const itensCriados = [];
 
       for (let i = 0; i < qty; i++) {
         const idOffline = `eq-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`;
-        const code = qty === 1 ? codigoPatrimonio.trim() : `${prefix}-${baseNum + i}`;
+        
+        let code = "";
+        if (qty === 1 && codigoPatrimonio.trim()) {
+          code = codigoPatrimonio.trim();
+        } else {
+          let existe = true;
+          while (existe) {
+            const num = Math.floor(1000 + Math.random() * 90000);
+            code = `${prefix}-${num}`;
+            const check = db.getAllSync("SELECT id FROM Equipamento WHERE codigoPatrimonio = ?", [code]);
+            if (check.length === 0 && !itensCriados.some(it => it.codigoPatrimonio === code)) {
+              existe = false;
+            }
+          }
+        }
 
         db.runSync(
           `INSERT INTO Equipamento (id, codigoPatrimonio, nome, categoriaId, tipoId, statusCondicao, permitirEmprestimo, recebeuComDefeito, fotoUrl, synced)
@@ -446,7 +521,7 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
             </View>
           )}
 
-          {/* FOTO COM AJUSTE DE ROTAÇÃO E CORTE QUADRADO */}
+          {/* FOTO COM CORTE NATIVO 1:1 E FERRAMENTAS RÁPIDAS */}
           <Text style={styles.sectionLabel}>Foto (Formato Quadrado 1:1)</Text>
           {displayImageUri ? (
             <View style={styles.squarePhotoWrapper}>
@@ -454,15 +529,13 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
                 <Image source={{ uri: displayImageUri }} style={styles.squarePhoto} resizeMode="cover" />
               </View>
               <View style={styles.photoControlsRow}>
-                <TouchableOpacity
-                  style={styles.photoControlBtn}
-                  onPress={() => {
-                    setCropImageRaw(displayImageUri);
-                    setShowCropModal(true);
-                  }}
-                >
-                  <Crop size={16} color="#4f46e5" />
-                  <Text style={styles.photoControlBtnText}>Recortar / Girar</Text>
+                <TouchableOpacity style={styles.photoControlBtn} onPress={handleGirar90}>
+                  <RotateCw size={16} color="#4f46e5" />
+                  <Text style={styles.photoControlBtnText}>Girar 90°</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.photoControlBtn} onPress={handleEspelhar}>
+                  <FlipHorizontal size={16} color="#4f46e5" />
+                  <Text style={styles.photoControlBtnText}>Espelhar</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.photoControlBtn} onPress={tirarFoto}>
                   <Camera size={16} color="#2563eb" />
@@ -489,7 +562,7 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
                   <Text style={styles.photoActionBtnText}>Galeria</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.photoHelperText}>Giro gradual -180° a +180° e enquadramento quadrado</Text>
+              <Text style={styles.photoHelperText}>Corte nativo com pinça e enquadramento 1:1 a 60/120 FPS</Text>
             </View>
           )}
 
@@ -765,14 +838,6 @@ export default function CadastrarEquipamentoScreen({ navigation, route }) {
           </TouchableOpacity>
         </ScrollView>
       </View>
-
-      {/* STUDIO DE CORTE E ROTAÇÃO UNIFICADO */}
-      <ImageCropModal
-        visible={showCropModal}
-        imageUri={cropImageRaw}
-        onClose={() => setShowCropModal(false)}
-        onConfirm={(processedUri) => setFotoUri(processedUri)}
-      />
 
       {/* MODAL ESCOLHER CATEGORIA */}
       <Modal visible={showModalCat} animationType="slide" transparent>

@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { motion } from 'framer-motion';
 import { api } from '../lib/api';
 import { toast } from 'sonner';
+import { formatPhoneMask } from '../lib/utils';
 
 export default function AdminIntegracoes() {
   const { token } = useAuth();
@@ -10,6 +11,10 @@ export default function AdminIntegracoes() {
   // WhatsApp State
   const [waStatus, setWaStatus] = useState<string>('CARREGANDO');
   const [waQr, setWaQr] = useState<string | null>(null);
+  const [testPhone, setTestPhone] = useState('');
+  const [sendingTest, setSendingTest] = useState(false);
+  const [searchingPhoto, setSearchingPhoto] = useState(false);
+  const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
 
   // Sync Mobile State
   const [syncQr, setSyncQr] = useState<string | null>(null);
@@ -109,6 +114,65 @@ export default function AdminIntegracoes() {
         }
       }
     });
+  };
+
+  const testarMensagemWa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testPhone.trim()) {
+      toast.error('Informe um número com DDD para o teste.');
+      return;
+    }
+    setSendingTest(true);
+    try {
+      const res = await fetch(api('/configuracoes/whatsapp/teste'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ phone: testPhone.trim() })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success('Mensagem de teste enviada com sucesso ao WhatsApp!');
+      } else {
+        toast.error(data.error || 'Erro ao enviar mensagem de teste.');
+      }
+    } catch (err: any) {
+      toast.error('Erro de conexão ao testar WhatsApp.');
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
+  const testarBuscaFoto = async () => {
+    if (!testPhone.trim()) {
+      toast.error('Informe um número com DDD para buscar a foto.');
+      return;
+    }
+    setSearchingPhoto(true);
+    setPreviewPhoto(null);
+    try {
+      const res = await fetch(api('/configuracoes/whatsapp/buscar-foto'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ phone: testPhone.trim() })
+      });
+      const data = await res.json();
+      if (res.ok && data.fotoUrl) {
+        setPreviewPhoto(data.fotoUrl);
+        toast.success('Foto de perfil encontrada no WhatsApp!');
+      } else {
+        toast.info(data.error || 'Foto não encontrada ou perfil privado.');
+      }
+    } catch (err) {
+      toast.error('Erro ao buscar foto.');
+    } finally {
+      setSearchingPhoto(false);
+    }
   };
 
   const salvarEmail = async (e: React.FormEvent) => {
@@ -240,13 +304,67 @@ export default function AdminIntegracoes() {
           </div>
           <div className="p-6 flex flex-col items-center justify-center min-h-[300px]">
             {waStatus === 'CONECTADO' ? (
-              <div className="text-center space-y-4">
-                <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
-                  <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+              <div className="w-full space-y-5 text-center">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
                 </div>
-                <h3 className="text-xl font-bold text-slate-800">Robô Conectado</h3>
-                <p className="text-slate-500 text-sm">O sistema está pronto para enviar notificações no WhatsApp dos usuários.</p>
-                <button onClick={desconectarWhatsapp} className="mt-4 px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl font-medium transition-colors">Desconectar</button>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">Robô Conectado & Ativo</h3>
+                  <p className="text-slate-500 text-xs mt-1">O sistema está pronto para enviar notificações e buscar fotos de perfil dos contatos.</p>
+                </div>
+
+                {/* PAINEL DE TESTE RÁPIDO */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-left space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Testar Conexão e Busca de Foto</h4>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="DDD + Número (ex: (99) 99156-1407)"
+                      value={testPhone}
+                      onChange={e => setTestPhone(formatPhoneMask(e.target.value))}
+                      className="w-full text-xs rounded-lg border-slate-300 px-3 py-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    />
+                    
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={testarMensagemWa}
+                        disabled={sendingTest || !testPhone}
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs py-2 px-3 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        {sendingTest ? 'Enviando...' : '💬 Enviar Teste'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={testarBuscaFoto}
+                        disabled={searchingPhoto || !testPhone}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs py-2 px-3 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        {searchingPhoto ? 'Buscando...' : '🔍 Buscar Foto'}
+                      </button>
+                    </div>
+
+                    {previewPhoto && (
+                      <div className="flex items-center gap-3 bg-white p-2.5 rounded-lg border border-emerald-200 mt-2">
+                        <img 
+                          src={previewPhoto.startsWith('/uploads/') ? api(previewPhoto) : previewPhoto} 
+                          alt="Foto WhatsApp" 
+                          className="w-10 h-10 rounded-full object-cover border border-emerald-300"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-emerald-800">Foto Obtida com Sucesso!</p>
+                          <p className="text-[10px] text-slate-500 truncate">{previewPhoto}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button onClick={desconectarWhatsapp} className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl font-medium transition-colors text-xs">
+                    Desconectar Robô
+                  </button>
+                </div>
               </div>
             ) : waStatus === 'MODO_ESPERA' ? (
               <div className="text-center space-y-4">
